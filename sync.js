@@ -31,6 +31,17 @@
   }
 
   /* ------------------------------ network --------------------------- */
+  /* A missing route answers with an HTML 404, not JSON. Say which it was
+     instead of blaming the connection. */
+  async function callApi(url, opts) {
+    const r = await fetch(url, opts);
+    let j = null;
+    try { j = await r.json(); } catch (e) { j = null; }
+    if (j) return j;
+    if (r.status === 404) return { ok: false, message: 'No sync service found — check the api folder' };
+    return { ok: false, message: 'Sync service error ' + r.status };
+  }
+
   async function push(dropSamples) {
     if (!cfg.code || busy || !window.MNApp) return;
     const exclude = dropSamples ? window.MNApp.sampleIds() : [];
@@ -40,12 +51,11 @@
 
     busy = true; setStatus('syncing');
     try {
-      const r = await fetch('/api/sync', {
+      const j = await callApi('/api/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body
       });
-      const j = await r.json();
       if (!j.ok) { setStatus('error', j.message || 'Sync unavailable'); return; }
       lastPushed = body;
       dirty = false;
@@ -62,8 +72,7 @@
     if (dirty) return push();                       // never let a pull discard local edits
     busy = true; setStatus('syncing');
     try {
-      const r = await fetch('/api/sync?code=' + encodeURIComponent(cfg.code), { cache: 'no-store' });
-      const j = await r.json();
+      const j = await callApi('/api/sync?code=' + encodeURIComponent(cfg.code), { cache: 'no-store' });
       if (!j.ok) { setStatus('error', j.message || 'Sync unavailable'); return; }
       window.MNApp.merge(j.state);
       lastSyncAt = Date.now();
@@ -79,8 +88,7 @@
   async function joinAndPush() {
     let workspaceHasDocs = false;
     try {
-      const peek = await fetch('/api/sync?code=' + encodeURIComponent(cfg.code), { cache: 'no-store' });
-      const pj = await peek.json();
+      const pj = await callApi('/api/sync?code=' + encodeURIComponent(cfg.code), { cache: 'no-store' });
       workspaceHasDocs = !!(pj.ok && pj.state && Object.keys(pj.state.docs || {}).length);
     } catch (e) { }
     await push(workspaceHasDocs);
