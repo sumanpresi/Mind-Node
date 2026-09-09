@@ -43,7 +43,8 @@ let S = { docs: {}, order: [], active: null };
 let UI = {
   view: 'map', theme: 'light', sidebar: true, inspector: false,
   showTasks: false, showNotes: true, showImages: true, showTags: true,
-  focusMode: false, highlightTag: null, selected: null
+  focusMode: false, highlightTag: null, selected: null,
+  inspTab: 'style', sheetTab: null
 };
 let pendingFit = false;
 let P = {};                 // id -> {x,y,w,h}
@@ -261,6 +262,34 @@ function pasteBranch(intoId) {
   UI.selected = top.id;
   save(); render();
 }
+function cutBranch(id) {
+  if (!N(id) || !N(id).parent) return toast('The central idea stays');
+  copyBranch(id, true);
+  UI.selected = id;
+  deleteSelected();
+  toast('Cut');
+}
+function sortChildren(id) {
+  const n = N(id);
+  if (!n || n.children.length < 2) return toast('Nothing to sort');
+  pushUndo();
+  n.children.sort((a, b) => (N(a).text || '').localeCompare(N(b).text || '', undefined, { sensitivity: 'base' }));
+  save(); render();
+  toast('Sorted A to Z');
+}
+function createParent(id) {
+  const d = doc(), n = N(id);
+  if (!n || !n.parent) return toast('The central idea is already at the top');
+  pushUndo();
+  const p = N(n.parent);
+  const np = mkNode(n.parent, '');
+  d.nodes[np.id] = np;
+  p.children[p.children.indexOf(id)] = np.id;
+  np.children = [id];
+  n.parent = np.id;
+  UI.selected = np.id;
+  save(); render(); editNode(np.id);
+}
 function duplicateNode(id) {
   const n = N(id);
   if (!n || !n.parent) return toast('The central idea cannot be duplicated');
@@ -310,12 +339,12 @@ function render() {
   $('#canvas').hidden = UI.view !== 'map';
   $('#zoombar').hidden = UI.view !== 'map';
   $('#outline').hidden = UI.view !== 'outline';
-  $('#mobilebar').hidden = !UI.selected;
   $('#scrim').hidden = !(window.innerWidth <= 900 && (UI.sidebar || UI.inspector));
 
   renderDocList();
   if (UI.view === 'map') renderMap(); else renderOutline();
   renderInspector();
+  renderSheet();
 }
 
 /* --------------------------- documents list ------------------------ */
@@ -517,6 +546,7 @@ function buildNodeEl(id) {
   const meta = [];
   if (UI.showNotes && n.note.trim()) meta.push(`<span class="n-note-ic" data-note="${id}">📝</span>`);
   if (n.link && S.docs[n.link]) meta.push(`<span class="n-link-ic" data-link="${id}" title="Open linked document">🔗</span>`);
+  if (n.url) meta.push(`<span class="n-url-ic" data-url="${id}" title="Open link">↗</span>`);
   if (meta.length) {
     const m = document.createElement('span');
     m.className = 'n-meta'; m.innerHTML = meta.join('');
@@ -738,13 +768,18 @@ function curve(a, b, arc) {
     const mx = (ac.x + bc.x) / 2 + dy * 0.16, my = (ac.y + bc.y) / 2 - dx * 0.16;
     return `M${ac.x} ${ac.y} Q${mx} ${my} ${bc.x} ${bc.y}`;
   }
+  const kind = doc().branch || 'curved';
   if (Math.abs(dx) >= Math.abs(dy)) {
     const x1 = dx > 0 ? a.x + a.w : a.x, x2 = dx > 0 ? b.x : b.x + b.w;
     const m = (x1 + x2) / 2;
+    if (kind === 'straight') return `M${x1} ${ac.y} L${x2} ${bc.y}`;
+    if (kind === 'elbow') return `M${x1} ${ac.y} H${m} V${bc.y} H${x2}`;
     return `M${x1} ${ac.y} C${m} ${ac.y} ${m} ${bc.y} ${x2} ${bc.y}`;
   }
   const y1 = dy > 0 ? a.y + a.h : a.y, y2 = dy > 0 ? b.y : b.y + b.h;
   const m = (y1 + y2) / 2;
+  if (kind === 'straight') return `M${ac.x} ${y1} L${bc.x} ${y2}`;
+  if (kind === 'elbow') return `M${ac.x} ${y1} V${m} H${bc.x} V${y2}`;
   return `M${ac.x} ${y1} C${ac.x} ${m} ${bc.x} ${m} ${bc.x} ${y2}`;
 }
 
@@ -954,6 +989,12 @@ function canvasSetup() {
     if (note) { UI.selected = note.dataset.note; UI.inspector = true; render(); return; }
     const link = e.target.closest('[data-link]');
     if (link) { const t = N(link.dataset.link).link; if (S.docs[t]) openDoc(t); return; }
+    const urlIc = e.target.closest('[data-url]');
+    if (urlIc) {
+      const u = N(urlIc.dataset.url).url;
+      if (u) window.open(/^https?:\/\//i.test(u) ? u : 'https://' + u, '_blank', 'noopener');
+      return;
+    }
     const add = e.target.closest('[data-add]');
     if (add) {
       const id = add.dataset.for;
@@ -1261,49 +1302,117 @@ function editOutline(id, el) {
 /* =====================================================================
    INSPECTOR
    ===================================================================== */
+const PANEL_TABS = [
+  ['actions', 'Actions', '<svg viewBox="0 0 20 20" class="ic"><circle cx="5" cy="10" r="1.3"/><circle cx="10" cy="10" r="1.3"/><circle cx="15" cy="10" r="1.3"/></svg>'],
+  ['style', 'Style', '<svg viewBox="0 0 20 20" class="ic"><path d="M6 13c-1.5 0-2.5 1-2.5 3 2.5 0 3.5-1 3.5-2"/><path d="M8 14l7.5-7.5a1.8 1.8 0 00-2.5-2.5L5.5 11.5"/></svg>'],
+  ['note', 'Note', '<svg viewBox="0 0 20 20" class="ic"><rect x="4" y="3" width="12" height="14" rx="2"/><path d="M7 7h6M7 10h6M7 13h4"/></svg>'],
+  ['media', 'Media', '<svg viewBox="0 0 20 20" class="ic"><rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.4"/><path d="M4 14l4-4 3.5 3.5L14 11l2 2"/></svg>'],
+  ['tags', 'Tags', '<svg viewBox="0 0 20 20" class="ic"><path d="M3 8.5V4h4.5l8.5 8.5-4.5 4.5L3 8.5z"/><circle cx="6.6" cy="6.6" r="1.1"/></svg>']
+];
+
 function renderInspector() {
   if (!UI.inspector) return;
-  const body = $('#inspBody'), d = doc();
+  const body = $('#inspBody'), id = UI.selected;
   body.innerHTML = '';
-  const id = UI.selected;
-  $('#inspTitle').textContent = id ? 'Node' : 'Document';
-
-  if (!id) {
-    body.appendChild(group('Layout', selectRow(
-      [['horizontal', 'Horizontal'], ['vertical', 'Vertical'], ['compact', 'Compact'], ['radial', 'Radial'], ['manual', 'Manual']],
-      d.layout, v => {
-        pushUndo();
-        if (v === 'manual') pinAll();
-        else Object.values(d.nodes).forEach(n => { n.x = null; n.y = null; });
-        d.layout = v; save(); render();
-      })));
-    body.appendChild(group('Tags', tagManager()));
-    body.appendChild(group('Connections', connectionList()));
-    const stats = document.createElement('div');
-    stats.className = 'help';
-    stats.textContent = `${Object.keys(d.nodes).length} nodes · ${d.connections.length} connections · ` +
-      `${Object.values(d.nodes).filter(n => n.note.trim()).length} notes`;
-    body.appendChild(group('This document', stats));
-    body.appendChild(group(' ', rowOf([
-      chipBtn('Duplicate document', () => duplicateDoc(d.id)),
-      chipBtn('Export this document', () => exportDoc(d))
-    ])));
+  if (!id || !N(id)) {
+    $('#inspTitle').textContent = 'Document';
+    body.appendChild(panelDoc());
     return;
   }
+  $('#inspTitle').textContent = N(id).text ? N(id).text.slice(0, 24) : 'Node';
+  body.appendChild(tabRow('insp'));
+  body.appendChild(buildPanel(UI.inspTab || 'style', id));
+}
 
-  const n = N(id);
+function tabRow(where) {
+  const row = document.createElement('div');
+  row.className = 'tab-row';
+  const active = where === 'insp' ? (UI.inspTab || 'style') : UI.sheetTab;
+  PANEL_TABS.forEach(([k, label, icon]) => {
+    const b = document.createElement('button');
+    b.className = 'tab-btn' + (active === k ? ' is-on' : '');
+    b.innerHTML = icon;
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.addEventListener('click', () => {
+      if (where === 'insp') UI.inspTab = k;
+      else UI.sheetTab = (UI.sheetTab === k ? null : k);
+      save(); render();
+    });
+    row.appendChild(b);
+  });
+  return row;
+}
 
-  /* shape */
-  body.appendChild(group('Shape', rowOf(SHAPES.map(([v, label]) =>
+function buildPanel(tab, id) {
+  const wrap = document.createElement('div');
+  const fn = { actions: panelActions, style: panelStyle, note: panelNote, media: panelMedia, tags: panelTags }[tab] || panelStyle;
+  fn(id, wrap);
+  return wrap;
+}
+
+/* ------------------------------ panels ----------------------------- */
+function panelActions(id, w) {
+  const d = doc(), n = N(id), isRoot = id === d.root;
+  w.appendChild(group('Edit', rowOf([
+    chipBtn('Edit title', () => { UI.inspector = UI.inspector && window.innerWidth > 900; render(); editNode(id); }),
+    chipBtn('Add child', () => newChild(id)),
+    chipBtn('Add sibling', () => newSibling(id)),
+    chipBtn('New parent', () => createParent(id))
+  ])));
+
+  const st = taskState(id);
+  w.appendChild(group('Node', rowOf([
+    chipBtn(st === 'done' ? 'Done' : 'Add task', () => { pushUndo(); setDone(id, st !== 'done'); UI.showTasks = true; save(); render(); }, st === 'done'),
+    chipBtn(n.collapsed ? 'Unfold' : 'Fold', () => { N(id).collapsed = !N(id).collapsed; save(); render(); }),
+    chipBtn('Create connection', () => doAct('connect'), !!connectFrom),
+    chipBtn('Sort children A–Z', () => sortChildren(id))
+  ])));
+
+  w.appendChild(group('Clipboard', rowOf([
+    chipBtn('Cut', () => cutBranch(id)),
+    chipBtn('Copy', () => copyBranch(id)),
+    chipBtn('Paste into', () => pasteBranch(id)),
+    chipBtn('Duplicate', () => duplicateNode(id)),
+    chipBtn('Delete', () => deleteSelected(), false, true)
+  ])));
+
+  /* links out: to another document, or to a web address */
+  const links = document.createElement('div');
+  const sel = document.createElement('select');
+  sel.className = 'f-sel';
+  sel.innerHTML = '<option value="">No linked document</option>' +
+    S.order.filter(x => x !== d.id).map(x => `<option value="${x}">${escapeHtml(S.docs[x].name)}</option>`).join('');
+  sel.value = n.link || '';
+  sel.addEventListener('change', () => { pushUndo(); n.link = sel.value || null; save(); render(); });
+  links.appendChild(sel);
+
+  const url = document.createElement('input');
+  url.className = 'f-input';
+  url.style.marginTop = '6px';
+  url.placeholder = 'Web address, e.g. gsi.gov.in';
+  url.value = n.url || '';
+  url.addEventListener('change', () => { pushUndo(); n.url = url.value.trim(); save(); render(); });
+  links.appendChild(url);
+  w.appendChild(group('Links', links));
+
+  if (isRoot) {
+    const note = document.createElement('div');
+    note.className = 'help';
+    note.textContent = 'This is the central idea. It cannot be deleted, cut or given a parent.';
+    w.appendChild(note);
+  }
+}
+
+function panelStyle(id, w) {
+  const d = doc(), n = N(id);
+  w.appendChild(group('Shape', rowOf(SHAPES.map(([v, label]) =>
     chipBtn(label, () => { pushUndo(); n.shape = v; save(); render(); }, n.shape === v)))));
-
-  /* border + line */
-  body.appendChild(group('Border', rowOf([1, 2, 4, 6].map(v =>
+  w.appendChild(group('Border', rowOf([1, 2, 4, 6].map(v =>
     chipBtn(v + ' pt', () => { pushUndo(); n.border = v; save(); render(); }, n.border === v)))));
-  body.appendChild(group('Branch line', rowOf([['solid', 'Solid'], ['dashed', 'Dashed'], ['dotted', 'Dotted']].map(([v, l]) =>
+  w.appendChild(group('Branch line', rowOf([['solid', 'Solid'], ['dashed', 'Dashed'], ['dotted', 'Dotted']].map(([v, l]) =>
     chipBtn(l, () => { pushUndo(); n.lineStyle = v; save(); render(); }, n.lineStyle === v)))));
 
-  /* colour */
   const colors = document.createElement('div');
   colors.className = 'row';
   [null, ...PALETTE, ROOT_COLOR].forEach(c => {
@@ -1312,78 +1421,163 @@ function renderInspector() {
     b.style.background = c || 'transparent';
     b.style.boxShadow = c ? 'none' : 'inset 0 0 0 2px var(--line)';
     b.title = c ? c : 'Inherit from branch';
+    b.setAttribute('aria-label', c ? 'Colour ' + c : 'Inherit colour from branch');
     b.addEventListener('click', () => { pushUndo(); n.color = c; save(); render(); });
     colors.appendChild(b);
   });
-  body.appendChild(group('Colour', colors));
+  w.appendChild(group('Colour', colors));
 
-  /* task */
-  if (id !== d.root) {
-    const st = taskState(id);
-    body.appendChild(group('Task', rowOf([
-      chipBtn(st === 'done' ? 'Done' : 'Mark done', () => { pushUndo(); setDone(id, st !== 'done'); save(); render(); }, st === 'done'),
-      chipBtn(UI.showTasks ? 'Hide checkboxes' : 'Show checkboxes', () => { UI.showTasks = !UI.showTasks; save(); render(); })
-    ])));
-  }
+  w.appendChild(group('Whole map', rowOf([
+    ...[['horizontal', 'Horizontal'], ['vertical', 'Vertical'], ['compact', 'Compact'], ['radial', 'Radial'], ['manual', 'Manual']]
+      .map(([v, l]) => chipBtn(l, () => {
+        pushUndo();
+        if (v === 'manual') pinAll();
+        else Object.values(d.nodes).forEach(x => { x.x = null; x.y = null; });
+        d.layout = v; save(); render();
+      }, d.layout === v))
+  ])));
+  w.appendChild(group('Branch shape', rowOf([['curved', 'Curved'], ['straight', 'Straight'], ['elbow', 'Elbow']].map(([v, l]) =>
+    chipBtn(l, () => { pushUndo(); d.branch = v; save(); render(); }, (d.branch || 'curved') === v)))));
+}
 
-  /* note */
+function panelNote(id, w) {
+  const n = N(id);
   const ta = document.createElement('textarea');
   ta.className = 'f-area';
-  ta.placeholder = 'Details that stay out of the way until you need them.';
+  ta.placeholder = 'Tap to enter notes. They stay hidden behind a small marker until you open them.';
   ta.value = n.note;
   ta.addEventListener('input', () => { n.note = ta.value; save(); });
   ta.addEventListener('blur', () => render());
-  body.appendChild(group('Note', ta));
+  w.appendChild(group('Note', ta));
+}
 
-  /* tags */
-  body.appendChild(group('Tags', tagManager(id)));
-
-  /* media */
-  const media = document.createElement('div');
+function panelMedia(id, w) {
+  const n = N(id);
   const grid = document.createElement('div');
   grid.className = 'emoji-grid';
   EMOJI.forEach(em => {
     const b = document.createElement('button');
     b.textContent = em;
+    b.setAttribute('aria-label', 'Sticker ' + em);
     b.addEventListener('click', () => { pushUndo(); n.emoji = n.emoji === em ? '' : em; save(); render(); });
     grid.appendChild(b);
   });
-  media.appendChild(grid);
+  w.appendChild(group('Stickers and emoji', grid));
+
+  const media = document.createElement('div');
   const file = document.createElement('input');
   file.type = 'file'; file.accept = 'image/*'; file.className = 'f-input';
-  file.style.marginTop = '8px';
   file.addEventListener('change', () => {
     const f = file.files[0]; if (!f) return;
     shrinkImage(f, dataUrl => { pushUndo(); n.image = dataUrl; save(); render(); });
   });
   media.appendChild(file);
   if (n.image) media.appendChild(chipBtn('Remove image', () => { pushUndo(); n.image = ''; save(); render(); }));
-  body.appendChild(group('Image, stickers and emoji', media));
+  w.appendChild(group('Image', media));
+}
 
-  /* link to another document */
-  const sel = document.createElement('select');
-  sel.className = 'f-sel';
-  sel.innerHTML = '<option value="">No link</option>' +
-    S.order.filter(x => x !== d.id).map(x => `<option value="${x}">${escapeHtml(S.docs[x].name)}</option>`).join('');
-  sel.value = n.link || '';
-  sel.addEventListener('change', () => { pushUndo(); n.link = sel.value || null; save(); render(); });
-  const linkWrap = document.createElement('div');
-  linkWrap.appendChild(sel);
+function panelTags(id, w) {
+  w.appendChild(group('Tags', tagManager(id)));
   const h = document.createElement('div');
   h.className = 'help';
-  h.textContent = 'Linked nodes show a 🔗 you can tap to jump across documents.';
-  linkWrap.appendChild(h);
-  body.appendChild(group('Link to document', linkWrap));
+  h.textContent = 'The sun beside a tag spotlights everything carrying it and fades the rest.';
+  w.appendChild(h);
+}
 
-  /* actions */
-  body.appendChild(group('Actions', rowOf([
-    chipBtn('Add child', () => newChild(id)),
-    chipBtn('Add sibling', () => newSibling(id)),
-    chipBtn(N(id).collapsed ? 'Unfold' : 'Fold', () => { N(id).collapsed = !N(id).collapsed; save(); render(); }),
-    chipBtn('Duplicate', () => duplicateNode(id)),
-    chipBtn('Connect to…', () => doAct('connect')),
-    chipBtn('Delete', () => deleteSelected(), false, true)
+function panelDoc() {
+  const d = doc(), w = document.createElement('div');
+  w.appendChild(group('Layout', selectRow(
+    [['horizontal', 'Horizontal'], ['vertical', 'Vertical'], ['compact', 'Compact'], ['radial', 'Radial'], ['manual', 'Manual']],
+    d.layout, v => {
+      pushUndo();
+      if (v === 'manual') pinAll();
+      else Object.values(d.nodes).forEach(n => { n.x = null; n.y = null; });
+      d.layout = v; save(); render();
+    })));
+  w.appendChild(group('Branch shape', selectRow(
+    [['curved', 'Curved'], ['straight', 'Straight'], ['elbow', 'Elbow']],
+    d.branch || 'curved', v => { pushUndo(); d.branch = v; save(); render(); })));
+  w.appendChild(group('Tags', tagManager()));
+  w.appendChild(group('Connections', connectionList()));
+  const stats = document.createElement('div');
+  stats.className = 'help';
+  stats.textContent = `${Object.keys(d.nodes).length} nodes · ${d.connections.length} connections · ` +
+    `${Object.values(d.nodes).filter(n => n.note.trim()).length} notes`;
+  w.appendChild(group('This document', stats));
+  w.appendChild(group(' ', rowOf([
+    chipBtn('Duplicate document', () => duplicateDoc(d.id)),
+    chipBtn('Export this document', () => exportDoc(d))
   ])));
+  return w;
+}
+
+/* ===================================================================
+   Node sheet — the touch counterpart of the inspector. It sits over the
+   bottom of the canvas whenever a node is selected: a row of tabs, the
+   chosen panel, and the clipboard row underneath.
+   =================================================================== */
+function renderSheet() {
+  const host = $('#sheet');
+  if (!host) return;
+  const narrow = window.innerWidth <= 900;
+  const id = UI.selected;
+  if (!narrow || !id || !N(id) || UI.view !== 'map' || editing) {
+    host.hidden = true; host.innerHTML = '';
+    return;
+  }
+  host.hidden = false;
+  host.innerHTML = '';
+  host.classList.toggle('open', !!UI.sheetTab);
+
+  const head = document.createElement('div');
+  head.className = 'sheet-head';
+
+  const quick = (label, aria, fn, cls) => {
+    const b = document.createElement('button');
+    b.className = 'tab-btn ' + (cls || '');
+    b.innerHTML = label;
+    b.title = aria;
+    b.setAttribute('aria-label', aria);
+    b.addEventListener('click', fn);
+    return b;
+  };
+  head.appendChild(quick('<svg viewBox="0 0 20 20" class="ic"><rect x="2" y="6.5" width="7" height="7" rx="2"/><path d="M9 10h2.5"/><path d="M14.5 7.5v5M12 10h5"/></svg>',
+    'Add child', () => newChild(id), 'accent'));
+  head.appendChild(tabRow('sheet'));
+  head.appendChild(quick('<svg viewBox="0 0 20 20" class="ic"><path d="M8 12l4-4"/><path d="M11.5 5.5a3 3 0 014.2 4.2l-1.8 1.8"/><path d="M8.5 14.5a3 3 0 01-4.2-4.2l1.8-1.8"/></svg>',
+    'Create connection', () => doAct('connect'), connectFrom ? 'is-on' : ''));
+  host.appendChild(head);
+
+  if (!UI.sheetTab) return;
+
+  const title = document.createElement('div');
+  title.className = 'sheet-title';
+  title.textContent = N(id).text || 'Untitled node';
+  host.appendChild(title);
+
+  const body = document.createElement('div');
+  body.className = 'sheet-body';
+  body.appendChild(buildPanel(UI.sheetTab, id));
+  host.appendChild(body);
+
+  const foot = document.createElement('div');
+  foot.className = 'sheet-foot';
+  const fb = (icon, aria, fn, danger) => {
+    const b = document.createElement('button');
+    b.innerHTML = icon;
+    b.title = aria;
+    b.setAttribute('aria-label', aria);
+    if (danger) b.className = 'danger-btn';
+    b.addEventListener('click', fn);
+    return b;
+  };
+  foot.appendChild(fb('<svg viewBox="0 0 20 20" class="ic"><path d="M7 7L4 10l3 3"/><path d="M4 10h7.5a3.5 3.5 0 010 7H9"/></svg>', 'Undo', undo));
+  foot.appendChild(fb('<svg viewBox="0 0 20 20" class="ic"><circle cx="5.5" cy="14.5" r="2"/><circle cx="5.5" cy="5.5" r="2"/><path d="M7 6l9 8M7 14l9-8"/></svg>', 'Cut', () => cutBranch(id)));
+  foot.appendChild(fb('<svg viewBox="0 0 20 20" class="ic"><rect x="7" y="3" width="10" height="12" rx="2"/><path d="M13 17H5a2 2 0 01-2-2V7"/></svg>', 'Copy', () => copyBranch(id)));
+  foot.appendChild(fb('<svg viewBox="0 0 20 20" class="ic"><rect x="3" y="3" width="9" height="9" rx="2"/><rect x="8" y="8" width="9" height="9" rx="2"/></svg>', 'Duplicate', () => duplicateNode(id)));
+  foot.appendChild(fb('<svg viewBox="0 0 20 20" class="ic"><path d="M4 6h12"/><path d="M8 6V4h4v2"/><path d="M6 6l.8 10h6.4L14 6"/></svg>', 'Delete', () => deleteSelected(), true));
+  foot.appendChild(fb('<svg viewBox="0 0 20 20" class="ic"><path d="M13 7l3 3-3 3"/><path d="M16 10H8.5a3.5 3.5 0 000 7H11"/></svg>', 'Redo', redo));
+  host.appendChild(foot);
 }
 
 function group(title, child) {
@@ -1733,11 +1927,6 @@ function wire() {
     if (b && !b.disabled) doAct(b.dataset.act);
   });
 
-  $('#mobilebar').addEventListener('click', e => {
-    const b = e.target.closest('[data-act]');
-    if (b) doAct(b.dataset.act);
-  });
-
   let rt = null;
   const onViewportChange = () => {
     clearTimeout(rt);
@@ -1787,6 +1976,8 @@ window.MNApp = {
   /* take the server's version of the workspace; returns false if it was skipped */
   merge(state) {
     if (editing) return false;
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return false;
     if (!state || !state.docs || !Object.keys(state.docs).length) return false;
 
     const cams = {};

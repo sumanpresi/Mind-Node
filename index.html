@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=6" />
+<link rel="stylesheet" href="styles.css?v=7" />
 </head>
 <body>
 
@@ -189,15 +189,9 @@
 
     </div>
 
-    <!-- selected-node actions, phone / cover screen -->
-    <div id="mobilebar" hidden>
-      <button data-act="child">+ Child</button>
-      <button data-act="sibling">+ Sibling</button>
-      <button data-act="fold">Fold</button>
-      <button data-act="connect">Link</button>
-      <button data-act="style">Style</button>
-      <button data-act="delete">Delete</button>
-    </div>
+    <!-- node sheet: the touch counterpart of the inspector -->
+    <div id="sheet" hidden></div>
+
   </main>
 
   <div id="scrim" hidden></div>
@@ -205,7 +199,7 @@
   <div id="toast" hidden></div>
 </div>
 
-<script src="app.js?v=6"></script>
-<script src="sync.js?v=6"></script>
+<script src="app.js?v=7"></script>
+<script src="sync.js?v=7"></script>
 </body>
 </html>

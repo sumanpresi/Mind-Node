@@ -396,16 +396,37 @@ button{cursor:pointer;background:none;border:0}
 .emoji-grid button:hover{background:var(--surface-2)}
 .help{font-size:11.5px;color:var(--muted);line-height:1.5;margin-top:6px}
 
-/* ================= mobile bar / scrim / toast ================= */
-#mobilebar{
-  display:none;gap:6px;padding:8px 10px calc(8px + var(--safe-b));
-  background:var(--surface);border-top:1px solid var(--line);
-}
-#mobilebar button{
-  flex:1;padding:11px 4px;border-radius:10px;background:var(--surface-2);font-size:12.5px;font-weight:700;color:var(--text);
-}
-#mobilebar button[data-act="delete"]{color:var(--danger)}
+/* ================= tabbed panels ================= */
+.tab-row{display:flex;gap:2px;align-items:center;flex:1;justify-content:space-around}
+.tab-btn{width:40px;height:38px;border-radius:10px;display:grid;place-items:center;color:var(--muted);flex:0 0 auto}
+.tab-btn:hover{background:var(--surface-2);color:var(--text)}
+.tab-btn.is-on{background:var(--accent-soft);color:var(--accent)}
+.tab-btn.accent{color:var(--accent)}
+#inspBody .tab-row{justify-content:flex-start;margin:-4px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 
+/* ================= node sheet (touch) ================= */
+#sheet{
+  position:fixed;left:0;right:0;bottom:0;z-index:34;
+  background:var(--surface);border-top:1px solid var(--line);
+  border-radius:16px 16px 0 0;box-shadow:0 -8px 28px rgba(20,20,43,.16);
+  padding-bottom:var(--safe-b);
+  display:flex;flex-direction:column;max-height:62dvh;
+}
+.sheet-head{display:flex;align-items:center;gap:4px;padding:6px 10px;border-bottom:1px solid transparent}
+#sheet.open .sheet-head{border-bottom-color:var(--line)}
+.sheet-title{
+  padding:10px 16px 2px;font-size:13px;font-weight:800;letter-spacing:-.01em;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.sheet-body{flex:1;overflow:auto;padding:10px 16px 4px;-webkit-overflow-scrolling:touch}
+.sheet-body .grp{margin-bottom:14px}
+.sheet-foot{display:flex;gap:4px;padding:8px 10px;border-top:1px solid var(--line);background:var(--surface-2)}
+.sheet-foot button{flex:1;height:42px;border-radius:10px;display:grid;place-items:center;color:var(--muted)}
+.sheet-foot button:hover{background:var(--surface)}
+.sheet-foot .danger-btn{color:var(--danger)}
+@media (min-width:901px){ #sheet{display:none !important} }
+
+/* ================= scrim / toast ================= */
 #scrim{position:fixed;inset:0;background:rgba(10,10,25,.45);z-index:35}
 #toast{
   position:fixed;left:50%;transform:translateX(-50%);bottom:calc(24px + var(--safe-b));z-index:80;
@@ -444,13 +465,16 @@ button{cursor:pointer;background:none;border:0}
   .icon-btn{width:32px;height:32px}
   .mini-sel{padding:5px;font-size:11.5px;max-width:74px}
   #inspector{width:min(340px,88vw)}
-  #mobilebar{display:flex}
   .node{max-width:min(66vw,210px);font-size:14.5px;padding:9px 12px}
   .node.is-root{font-size:16px}
   .n-fold{width:24px;height:24px;font-size:11px}
   .n-task{width:20px;height:20px;flex:0 0 20px}
   .add-handle{width:30px;height:30px;font-size:17px}
-  #zoombar{right:10px;bottom:10px}
+  #zoombar{right:10px;bottom:10px;transition:bottom .18s ease}
+  #app:has(#sheet:not([hidden])) #zoombar{bottom:calc(62px + var(--safe-b))}
+  #app:has(#sheet.open) #zoombar{opacity:0;pointer-events:none}
+  .tab-btn{width:44px;height:44px}
+  .sheet-foot button{height:46px}
   .zb{width:34px;height:34px}
   #outline{padding:18px 14px 60px}
   .ol-lvl0 .ol-txt{font-size:18px}
@@ -463,14 +487,13 @@ button{cursor:pointer;background:none;border:0}
   .strip{max-width:40vw}
   .tool-sep{display:none}
   .mini-sel{max-width:60px}
-  #mobilebar button{font-size:11.5px;padding:10px 2px}
+  .tab-btn{width:38px}
 }
 
 /* Cover screen is short as well as narrow — keep chrome tight in landscape */
 @media (max-height:560px) and (max-width:1000px){
   :root{--top-h:44px}
-  #mobilebar{padding-top:4px;padding-bottom:calc(4px + var(--safe-b))}
-  #mobilebar button{padding:7px 2px;font-size:11.5px}
+  #sheet{max-height:78dvh}
   .icon-btn{width:30px;height:30px}
   .doc-title{max-width:90px}
   #zoombar{padding:2px}
@@ -482,7 +505,7 @@ button{cursor:pointer;background:none;border:0}
 }
 
 @media print{
-  #sidebar,#topbar,#inspector,#mobilebar,#zoombar{display:none !important}
+  #sidebar,#topbar,#inspector,#sheet,#zoombar,#rail{display:none !important}
   #app{height:auto}
   #canvas{overflow:visible;background:#fff}
 }

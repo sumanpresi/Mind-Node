@@ -96,6 +96,19 @@ recalculates whenever the foldable is opened or closed.
 **Mind maps** — an infinite canvas. Drag the background to pan, pinch or `Ctrl` and
 scroll to zoom, **Fit** to frame everything.
 
+**The node sheet (phones and folded screens)** — select a node and a sheet rises from
+the bottom showing a row of tabs: add child, actions, style, note, media, tags and
+connect. Tap a tab and it expands; tap it again and it folds back to the row. Along the
+bottom sit undo, cut, copy, duplicate, delete and redo. Everything you can do to a node
+is reachable without leaving the map. On a wide screen the same panels appear as tabs in
+the right-hand inspector instead.
+
+**Node actions** — edit title, add child, add sibling, wrap a node in a new parent, mark
+as a task, fold, create a connection, sort children A to Z, cut, copy, paste into,
+duplicate, delete, link to another document, and link to a web address.
+
+**Branch shape** — curved, straight or elbow, per document, under Style.
+
 **Adding nodes** — point at any node, or tap it on a touch screen, and two round **+**
 buttons appear. The filled one on the outer edge, continuing the branch away from the
 centre, adds a **child**. The outlined one underneath the node adds a **sibling** beside
