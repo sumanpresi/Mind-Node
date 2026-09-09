@@ -51,6 +51,8 @@ let editing = null;         // node id being text-edited
 let connectFrom = null;     // pending connection source
 let dragOffset = null;      // {ids:Set, dx, dy}
 let undoStack = [];
+let redoStack = [];
+let clipboard = null;
 let lastTap = { id: null, t: 0 };
 let deletedDocs = {};       // id -> time it was deleted, so sync does not resurrect it
 let contentSigs = {};       // id -> fingerprint, so panning does not count as an edit
@@ -125,8 +127,13 @@ function colorOf(id) {
   }
   return ROOT_COLOR;
 }
-/* task state: 'done' | 'part' | 'open' */
+/* task state: 'done' | 'part' | 'open' — memoised per redraw */
+let taskMemo = {};
 function taskState(id) {
+  if (taskMemo[id]) return taskMemo[id];
+  return (taskMemo[id] = computeTaskState(id));
+}
+function computeTaskState(id) {
   const kids = kidsOf(N(id));
   if (!kids.length) return N(id).done ? 'done' : 'open';
   const states = kids.map(taskState);
@@ -135,6 +142,7 @@ function taskState(id) {
   return N(id).done ? 'done' : 'open';
 }
 function setDone(id, val) {
+  taskMemo = {};
   N(id).done = val;
   descendants(id).forEach(c => { N(c).done = val; });
 }
@@ -201,16 +209,63 @@ function load() {
     return true;
   } catch (e) { return false; }
 }
+function snapDoc() { return JSON.stringify({ id: S.active, doc: doc() }); }
 function pushUndo() {
-  undoStack.push(JSON.stringify({ id: S.active, doc: doc() }));
-  if (undoStack.length > 40) undoStack.shift();
+  undoStack.push(snapDoc());
+  if (undoStack.length > 60) undoStack.shift();
+  redoStack = [];                       // a fresh edit ends the redo trail
 }
-function undo() {
-  const snap = undoStack.pop();
-  if (!snap) return toast('Nothing to undo');
+function applySnap(snap) {
   const { id, doc: d } = JSON.parse(snap);
   S.docs[id] = d; S.active = id;
+  if (UI.selected && !d.nodes[UI.selected]) UI.selected = null;
   save(); render();
+}
+function undo() {
+  if (!undoStack.length) return toast('Nothing to undo');
+  redoStack.push(snapDoc());
+  applySnap(undoStack.pop());
+}
+function redo() {
+  if (!redoStack.length) return toast('Nothing to redo');
+  undoStack.push(snapDoc());
+  applySnap(redoStack.pop());
+}
+
+/* ---------------------- copy, paste, duplicate --------------------- */
+function copyBranch(id, quiet) {
+  const d = doc(), ids = [id, ...descendants(id)];
+  const nodes = {};
+  ids.forEach(x => { nodes[x] = JSON.parse(JSON.stringify(d.nodes[x])); });
+  clipboard = { root: id, nodes };
+  if (!quiet) toast(ids.length > 1 ? `Copied ${ids.length} nodes` : 'Copied');
+}
+function pasteBranch(intoId) {
+  if (!clipboard) return toast('Nothing copied yet');
+  if (!N(intoId)) return;
+  pushUndo();
+  const d = doc();
+  const clone = (oldId, parent) => {
+    const src = clipboard.nodes[oldId];
+    if (!src) return null;
+    const n = JSON.parse(JSON.stringify(src));
+    n.id = uid(); n.parent = parent; n.children = []; n.x = null; n.y = null;
+    d.nodes[n.id] = n;
+    (src.children || []).forEach(c => { const k = clone(c, n.id); if (k) n.children.push(k.id); });
+    return n;
+  };
+  const top = clone(clipboard.root, intoId);
+  if (!top) return;
+  N(intoId).children.push(top.id);
+  N(intoId).collapsed = false;
+  UI.selected = top.id;
+  save(); render();
+}
+function duplicateNode(id) {
+  const n = N(id);
+  if (!n || !n.parent) return toast('The central idea cannot be duplicated');
+  copyBranch(id, true);
+  pasteBranch(n.parent);
 }
 
 /* ------------------------------- toast ----------------------------- */
@@ -225,6 +280,12 @@ function toast(msg) {
 /* =====================================================================
    RENDER
    ===================================================================== */
+let cycleTheme = () => { };
+function themeMode() {
+  if (UI.theme !== 'system') return UI.theme;
+  return (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+}
+
 function render() {
   if (editing) {
     // still genuinely editing? if the field vanished, recover instead of freezing
@@ -233,10 +294,12 @@ function render() {
     editing = null;
   }
   const d = doc();
-  $('#app').dataset.theme = UI.theme;
+  $('#app').dataset.theme = themeMode();
   $('#app').classList.toggle('side-hidden', !UI.sidebar);
   $('#app').classList.toggle('insp-open', UI.inspector);
-  $('#themeBtn').textContent = UI.theme === 'light' ? 'Dark' : 'Light';
+  $('#themeBtn').textContent = UI.theme === 'light' ? 'Light' : UI.theme === 'dark' ? 'Dark' : 'System';
+  const railSync = $('#railSync'), strip = $('#syncBtn');
+  if (railSync && strip) railSync.dataset.state = strip.dataset.state || 'off';
   if ($('#docTitle').textContent !== d.name) $('#docTitle').textContent = d.name;
   $('#layoutSel').value = d.layout;
   $$('.seg-btn').forEach(b => b.classList.toggle('is-on', b.dataset.view === UI.view));
@@ -284,6 +347,21 @@ function renderDocList() {
     ul.appendChild(li);
   });
 }
+function duplicateDoc(id) {
+  const src = S.docs[id];
+  if (!src) return;
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.id = uid();
+  copy.name = src.name + ' copy';
+  copy.updated = Date.now();
+  delete copy.demo;
+  copy.nodes[copy.root].text = copy.name;
+  S.docs[copy.id] = copy;
+  S.order.splice(S.order.indexOf(id) + 1, 0, copy.id);
+  openDoc(copy.id);
+  toast('Document duplicated');
+}
+
 function openDoc(id) {
   S.active = id; UI.selected = null; connectFrom = null;
   if (window.innerWidth <= 900) UI.sidebar = false;
@@ -297,6 +375,8 @@ function renderMap() {
   const d = doc(), layer = $('#nodes');
   layer.innerHTML = '';
   P = {};
+  taskMemo = {};
+  refreshFocusSet();
 
   const visible = [];
   (function walk(id) {
@@ -304,12 +384,13 @@ function renderMap() {
     visKids(N(id)).forEach(walk);
   })(d.root);
 
-  // 1. build elements
-  visible.forEach(id => layer.appendChild(buildNodeEl(id)));
+  // 1. build elements, holding on to them: re-querying per node is quadratic
+  const els = {};
+  visible.forEach(id => { const el = buildNodeEl(id); els[id] = el; layer.appendChild(el); });
 
   // 2. measure
   visible.forEach(id => {
-    const el = layer.querySelector(`.node[data-id="${id}"]`);
+    const el = els[id];
     P[id] = { w: el.offsetWidth, h: el.offsetHeight, x: 0, y: 0 };
   });
 
@@ -319,7 +400,7 @@ function renderMap() {
 
   // 4. position
   visible.forEach(id => {
-    const el = layer.querySelector(`.node[data-id="${id}"]`);
+    const el = els[id];
     el.style.left = P[id].x + 'px';
     el.style.top = P[id].y + 'px';
   });
@@ -346,7 +427,7 @@ function renderMap() {
   });
 
   buildHandles();
-  applyDimming(visible);
+  applyDimming(visible, els);
   drawEdges(visible);
   applyCam();
   positionHandles();
@@ -359,11 +440,12 @@ function buildHandles() {
   const layer = $('#nodes');
   ['child', 'sibling'].forEach(kind => {
     const b = document.createElement('button');
-    b.className = 'add-handle';
+    b.className = 'add-handle' + (kind === 'sibling' ? ' sib' : '');
     b.id = 'h-' + kind;
     b.dataset.add = kind;
+    b.dataset.label = kind === 'child' ? 'Add child' : 'Add sibling';
     b.textContent = '+';
-    b.title = kind === 'child' ? 'Add a child here' : 'Add a node here';
+    b.title = kind === 'child' ? 'Add a child of this node' : 'Add a node beside this one';
     layer.appendChild(b);
   });
 }
@@ -378,6 +460,8 @@ function positionHandles() {
   const d = doc(), p = P[id], vertical = d.layout === 'vertical', side = sideOf(id);
   kid.dataset.for = id; sib.dataset.for = id;
 
+  /* child continues the branch outwards; sibling sits underneath, so the
+     two can never be mistaken for one another */
   if (vertical) {
     kid.style.left = (p.x + p.w / 2 - 11) + 'px';
     kid.style.top = (p.y + p.h - 8) + 'px';
@@ -386,7 +470,7 @@ function positionHandles() {
   } else {
     kid.style.left = (side > 0 ? p.x + p.w - 8 : p.x - 14) + 'px';
     kid.style.top = (p.y + p.h / 2 - 11) + 'px';
-    sib.style.left = (side > 0 ? p.x - 8 : p.x + p.w - 14) + 'px';
+    sib.style.left = (p.x + p.w / 2 - 11) + 'px';
     sib.style.top = (p.y + p.h - 8) + 'px';
   }
   kid.classList.add('show');
@@ -587,9 +671,10 @@ function layoutManual() {
     const n = d.nodes[id], p = P[id];
     if (n.x == null || n.y == null) {
       if (n.parent && P[n.parent]) {
-        const pp = P[n.parent];
-        n.x = pp.x + pp.w + 60;
-        n.y = pp.y + kidsOf(N(n.parent)).indexOf(id) * 62;
+        const pp = P[n.parent], gp = d.nodes[n.parent].parent;
+        const dir = (gp && P[gp]) ? (pp.x >= P[gp].x ? 1 : -1) : 1;
+        n.x = dir > 0 ? pp.x + pp.w + 60 : pp.x - p.w - 60;
+        n.y = pp.y + kidsOf(N(n.parent)).indexOf(id) * (p.h + 16);
       } else { n.x = -p.w / 2; n.y = -p.h / 2; }
     }
     p.x = n.x; p.y = n.y;
@@ -664,18 +749,22 @@ function curve(a, b, arc) {
 }
 
 /* --------------------- focus mode + tag highlight ------------------ */
+let focusSet = null;
+function refreshFocusSet() {
+  focusSet = null;
+  if (UI.focusMode && UI.selected && N(UI.selected)) {
+    focusSet = new Set([UI.selected, ...descendants(UI.selected), ...ancestors(UI.selected)]);
+  }
+}
 function isDimmed(id) {
   if (id === doc().root) return false;
   if (UI.highlightTag) return !N(id).tags.includes(UI.highlightTag);
-  if (UI.focusMode && UI.selected) {
-    const keep = new Set([UI.selected, ...descendants(UI.selected), ...ancestors(UI.selected)]);
-    return !keep.has(id);
-  }
+  if (focusSet) return !focusSet.has(id);
   return false;
 }
-function applyDimming(visible) {
+function applyDimming(visible, els) {
   visible.forEach(id => {
-    const el = $(`#nodes .node[data-id="${id}"]`);
+    const el = els ? els[id] : $(`#nodes .node[data-id="${id}"]`);
     if (el) el.classList.toggle('dim', isDimmed(id));
   });
 }
@@ -689,6 +778,8 @@ function cam() {
 function applyCam() {
   const c = cam();
   $('#world').style.transform = `translate(${c.x}px, ${c.y}px) scale(${c.s})`;
+  const z = $('#zoomFit');
+  if (z) z.textContent = Math.round(c.s * 100) + '%';
 }
 function zoomBy(f, px, py) {
   const c = cam(), s2 = clamp(c.s * f, 0.2, 3);
@@ -735,6 +826,9 @@ function canvasSetup() {
     const linkIc = e.target.closest('[data-link]');
     const addBtn = e.target.closest('[data-add]');
     if (foldBtn || taskBtn || noteIc || linkIc || addBtn) return;
+    /* While a node is being typed into, the canvas stays put. The browser
+       still blurs the field, which commits the text. */
+    if (editing) return;
 
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
@@ -824,6 +918,7 @@ function canvasSetup() {
   canvas.addEventListener('pointercancel', finish);
 
   canvas.addEventListener('wheel', e => {
+    if (editing) return;
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) zoomBy(e.deltaY > 0 ? 0.92 : 1.08, e.clientX, e.clientY);
     else { const c = cam(); c.x -= e.deltaX; c.y -= e.deltaY; applyCam(); save(); }
@@ -930,16 +1025,17 @@ function editNode(id) {
     el.removeEventListener('keydown', onKey);
     const text = readText(el).replace(/\s+$/, '');
     editing = null;
-    if (commit) {
-      const node = N(id);
-      if (!text.trim() && node && node.parent && !node.children.length) {
-        const parent = node.parent;      // a node left blank was never really wanted
-        removeNode(id);
-        UI.selected = parent;
-        save(); render();
-        return;
-      }
-      if (node) node.text = text;
+    const node = N(id);
+    const finalText = commit ? text : (node ? node.text : '');
+    if (node && node.parent && !node.children.length && !finalText.trim()) {
+      const parent = node.parent;        // a node left blank was never really wanted
+      removeNode(id);
+      UI.selected = parent;
+      save(); render();
+      return;
+    }
+    if (commit && node) {
+      node.text = text;
       if (id === doc().root) doc().name = text || 'Untitled';
       save();
     }
@@ -954,6 +1050,7 @@ function editNode(id) {
   };
   el.addEventListener('blur', onBlur);
   el.addEventListener('keydown', onKey);
+  setTimeout(keepEditVisible, 220);
 }
 
 function newChild(id) {
@@ -993,6 +1090,26 @@ function doAct(act) {
   else { UI.inspector = true; render(); }
 }
 
+/* When a phone keyboard opens it covers the bottom of the screen. Nudge the
+   canvas so the node being typed into stays in the visible strip. */
+function keepEditVisible() {
+  if (!editing || UI.view !== 'map') return;
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const el = document.querySelector(`.node[data-id="${editing}"]`);
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const visibleBottom = vv.offsetTop + vv.height;
+  const margin = 28;
+  if (r.bottom > visibleBottom - margin) {
+    cam().y -= (r.bottom - (visibleBottom - margin));
+    applyCam();
+  } else if (r.top < vv.offsetTop + margin) {
+    cam().y += (vv.offsetTop + margin - r.top);
+    applyCam();
+  }
+}
+
 /* ----------------------------- keyboard ---------------------------- */
 function keySetup() {
   document.addEventListener('keydown', e => {
@@ -1000,7 +1117,13 @@ function keySetup() {
     const tag = (e.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return;
 
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === 'z' && e.shiftKey) { e.preventDefault(); redo(); return; }
+    if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+    if (mod && e.key.toLowerCase() === 'c' && UI.selected) { e.preventDefault(); copyBranch(UI.selected); return; }
+    if (mod && e.key.toLowerCase() === 'v' && UI.selected) { e.preventDefault(); pasteBranch(UI.selected); return; }
+    if (mod && e.key.toLowerCase() === 'd' && UI.selected) { e.preventDefault(); duplicateNode(UI.selected); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); $('#search').focus(); UI.sidebar = true; render(); return; }
     if (e.key === '/') { e.preventDefault(); UI.sidebar = true; render(); $('#search').focus(); return; }
     if (e.key === 'Escape') {
@@ -1015,7 +1138,12 @@ function keySetup() {
     if (e.key === 'Tab') { e.preventDefault(); newChild(id); }
     else if (e.key === 'Enter') { e.preventDefault(); newSibling(id); }
     else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
-    else if (e.key === ' ') { e.preventDefault(); editNode(id); }
+    else if (e.key === 'F2') { e.preventDefault(); editNode(id); }
+    else if (e.key === ' ') {
+      e.preventDefault();
+      if (N(id).children.length) { N(id).collapsed = !N(id).collapsed; save(); render(); }
+      else editNode(id);
+    }
     else if (e.key.startsWith('Arrow')) { e.preventDefault(); navigate(e.key); }
   });
 }
@@ -1038,6 +1166,7 @@ function navigate(key) {
    OUTLINE VIEW
    ===================================================================== */
 function renderOutline() {
+  taskMemo = {};
   const d = doc(), host = $('#outline');
   host.innerHTML = '';
   const wrap = document.createElement('div');
@@ -1155,8 +1284,10 @@ function renderInspector() {
     stats.textContent = `${Object.keys(d.nodes).length} nodes · ${d.connections.length} connections · ` +
       `${Object.values(d.nodes).filter(n => n.note.trim()).length} notes`;
     body.appendChild(group('This document', stats));
-    const exp = chipBtn('Export this document', () => exportDoc(d));
-    body.appendChild(group(' ', exp));
+    body.appendChild(group(' ', rowOf([
+      chipBtn('Duplicate document', () => duplicateDoc(d.id)),
+      chipBtn('Export this document', () => exportDoc(d))
+    ])));
     return;
   }
 
@@ -1249,6 +1380,7 @@ function renderInspector() {
     chipBtn('Add child', () => newChild(id)),
     chipBtn('Add sibling', () => newSibling(id)),
     chipBtn(N(id).collapsed ? 'Unfold' : 'Fold', () => { N(id).collapsed = !N(id).collapsed; save(); render(); }),
+    chipBtn('Duplicate', () => duplicateNode(id)),
     chipBtn('Connect to…', () => doAct('connect')),
     chipBtn('Delete', () => deleteSelected(), false, true)
   ])));
@@ -1511,14 +1643,27 @@ function wire() {
   $('#inspectorBtn').addEventListener('click', () => { UI.inspector = !UI.inspector; save(); render(); });
   $('#closeInspector').addEventListener('click', () => { UI.inspector = false; save(); render(); });
 
-  $('#newDoc').addEventListener('click', () => {
+  const newDocument = () => {
     const d = mkDoc('Untitled map');
     d.updated = Date.now();
     S.docs[d.id] = d; S.order.push(d.id);
     openDoc(d.id);
     if (window.MNSync) window.MNSync.touch();
     toast('New document ready');
+  };
+  $('#newDoc').addEventListener('click', newDocument);
+
+  $('#undoBtn').addEventListener('click', undo);
+  $('#redoBtn').addEventListener('click', redo);
+
+  /* the icon rail shown when the sidebar is collapsed on a wide screen */
+  $('#railOpen').addEventListener('click', () => { UI.sidebar = true; save(); render(); });
+  $('#railNew').addEventListener('click', newDocument);
+  $('#railSearch').addEventListener('click', () => {
+    UI.sidebar = true; save(); render(); $('#search').focus();
   });
+  $('#railTheme').addEventListener('click', () => cycleTheme());
+  $('#railSync').addEventListener('click', () => { const b = $('#syncBtn'); if (b) b.click(); });
 
   $('#docTitle').addEventListener('blur', () => {
     const t = $('#docTitle').textContent.trim() || 'Untitled';
@@ -1563,10 +1708,16 @@ function wire() {
 
   $('#search').addEventListener('input', e => runSearch(e.target.value));
 
-  $('#themeBtn').addEventListener('click', () => {
-    UI.theme = UI.theme === 'light' ? 'dark' : 'light';
+  cycleTheme = () => {
+    UI.theme = UI.theme === 'light' ? 'dark' : UI.theme === 'dark' ? 'system' : 'light';
     save(); render();
-  });
+  };
+  $('#themeBtn').addEventListener('click', cycleTheme);
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onScheme = () => { if (UI.theme === 'system') render(); };
+    mq.addEventListener ? mq.addEventListener('change', onScheme) : mq.addListener(onScheme);
+  }
   $('#exportAll').addEventListener('click', exportAll);
   $('#importBtn').addEventListener('click', () => $('#importFile').click());
   $('#importFile').addEventListener('change', e => {
@@ -1588,10 +1739,26 @@ function wire() {
   });
 
   let rt = null;
-  window.addEventListener('resize', () => {
+  const onViewportChange = () => {
     clearTimeout(rt);
-    rt = setTimeout(() => { if (!editing) render(); }, 140);
-  });
+    rt = setTimeout(() => {
+      if (editing) keepEditVisible();
+      else render();
+    }, 140);
+  };
+  window.addEventListener('resize', onViewportChange);
+  window.addEventListener('orientationchange', onViewportChange);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => {
+      if (editing) setTimeout(keepEditVisible, 60); else onViewportChange();
+    });
+  }
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(() => { });
+    });
+  }
 
   canvasSetup();
   keySetup();

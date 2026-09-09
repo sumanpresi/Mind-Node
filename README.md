@@ -15,6 +15,7 @@ keeps working on a train with no signal and catches up when the connection retur
 | `styles.css` | All styling, including the screen sizes below |
 | `app.js` | All behaviour |
 | `sync.js` | Keeps this device in step with the others |
+| `sw.js` | Lets the app start with no connection |
 | `manifest.json` | Lets phones and tablets install it as an app |
 | `api/sync.js` | The small service on Vercel that holds the shared copy |
 
@@ -96,8 +97,9 @@ recalculates whenever the foldable is opened or closed.
 scroll to zoom, **Fit** to frame everything.
 
 **Adding nodes** — point at any node, or tap it on a touch screen, and two round **+**
-buttons appear: one on the outer edge adds a child, one on the branch itself drops a new
-node in beside it. The new node opens for typing straight away, and if you leave it empty
+buttons appear. The filled one on the outer edge, continuing the branch away from the
+centre, adds a **child**. The outlined one underneath the node adds a **sibling** beside
+it. Hover either one and it tells you which is which. The new node opens for typing straight away, and if you leave it empty
 it removes itself. The same five actions — add child, add sibling, fold, connect, delete —
 sit next to the Map and Outline switch at the top, and along the bottom of the screen on
 a phone. They wake up as soon as a node is selected.
@@ -144,7 +146,15 @@ are shrunk before they are stored.
 **Search** — the box in the sidebar searches node text and notes across every document,
 opens the right one, unfolds the path and centres on the match.
 
-**Dark mode** — the button at the bottom of the sidebar.
+**Dark mode** — the button at the bottom of the sidebar cycles Light, Dark and System.
+System follows whatever your phone or PC is set to, including its night schedule.
+
+**Undo and redo** — the two arrows at the left of the toolbar, or the usual keys. Sixty
+steps are kept per document.
+
+**Collapsed sidebar** — hide the documents panel on a wide screen and a slim icon rail
+takes its place, so search, a new document, the theme and the sync light stay one click
+away.
 
 ## Keyboard
 
@@ -152,7 +162,11 @@ opens the right one, unfolds the path and centres on the match.
 | --- | --- |
 | `Tab` | New child |
 | `Enter` | New sibling |
-| `Space` | Edit the selected node |
+| `Space` | Fold a branch, or edit a node with no children |
+| `F2` | Rename the selected node |
+| `Ctrl` / `Cmd` + `C`, `V` | Copy and paste a whole branch |
+| `Ctrl` / `Cmd` + `D` | Duplicate a branch |
+| `Ctrl` / `Cmd` + `Shift` + `Z` | Redo |
 | `Esc` while typing | Discard what you just typed |
 | Arrow keys | Move between nodes |
 | `Delete` | Delete the node and its branch |

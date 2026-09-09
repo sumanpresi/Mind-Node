@@ -11,11 +11,31 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=4" />
+<link rel="stylesheet" href="styles.css?v=6" />
 </head>
 <body>
 
 <div id="app" data-theme="light">
+
+  <nav id="rail" aria-label="Quick actions">
+    <span class="rail-mark" aria-hidden="true"></span>
+    <button class="rail-btn" id="railOpen" title="Show documents" aria-label="Show documents">
+      <svg viewBox="0 0 20 20" class="ic"><path d="M3 5h14M3 10h14M3 15h14"/></svg>
+    </button>
+    <button class="rail-btn" id="railSearch" title="Search" aria-label="Search">
+      <svg viewBox="0 0 20 20" class="ic"><circle cx="9" cy="9" r="5"/><path d="M13 13l4 4"/></svg>
+    </button>
+    <button class="rail-btn" id="railNew" title="New document" aria-label="New document">
+      <svg viewBox="0 0 20 20" class="ic"><path d="M10 4v12M4 10h12"/></svg>
+    </button>
+    <button class="rail-btn" id="railTheme" title="Theme" aria-label="Theme">
+      <svg viewBox="0 0 20 20" class="ic"><circle cx="10" cy="10" r="6"/><path d="M10 4a6 6 0 000 12z" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <span class="rail-spacer"></span>
+    <button class="rail-btn" id="railSync" title="Sync" aria-label="Sync" data-state="off">
+      <span class="sync-dot"></span>
+    </button>
+  </nav>
 
   <!-- ============ documents sidebar ============ -->
   <aside id="sidebar" aria-label="Documents">
@@ -69,6 +89,13 @@
 
       <div class="strip" id="strip">
         <div class="acts" id="acts">
+          <button class="icon-btn hist" id="undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">
+            <svg viewBox="0 0 20 20" class="ic"><path d="M7 7L4 10l3 3"/><path d="M4 10h7.5a3.5 3.5 0 010 7H9"/></svg>
+          </button>
+          <button class="icon-btn hist" id="redoBtn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
+            <svg viewBox="0 0 20 20" class="ic"><path d="M13 7l3 3-3 3"/><path d="M16 10H8.5a3.5 3.5 0 000 7H11"/></svg>
+          </button>
+          <div class="tool-sep"></div>
           <button class="icon-btn act" data-act="child" title="Add child (Tab)" aria-label="Add child">
             <svg viewBox="0 0 20 20" class="ic"><rect x="2" y="6.5" width="7" height="7" rx="2"/><path d="M9 10h2.5"/><path d="M14.5 7.5v5M12 10h5"/></svg>
           </button>
@@ -178,7 +205,7 @@
   <div id="toast" hidden></div>
 </div>
 
-<script src="app.js?v=4"></script>
-<script src="sync.js?v=4"></script>
+<script src="app.js?v=6"></script>
+<script src="sync.js?v=6"></script>
 </body>
 </html>
