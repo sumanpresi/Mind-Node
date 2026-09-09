@@ -241,7 +241,7 @@ function copyBranch(id, quiet) {
   clipboard = { root: id, nodes };
   if (!quiet) toast(ids.length > 1 ? `Copied ${ids.length} nodes` : 'Copied');
 }
-function pasteBranch(intoId) {
+function pasteBranch(intoId, plain) {
   if (!clipboard) return toast('Nothing copied yet');
   if (!N(intoId)) return;
   pushUndo();
@@ -251,6 +251,10 @@ function pasteBranch(intoId) {
     if (!src) return null;
     const n = JSON.parse(JSON.stringify(src));
     n.id = uid(); n.parent = parent; n.children = []; n.x = null; n.y = null;
+    if (plain) {                       // arrive with the branch's own look
+      n.shape = 'rounded'; n.color = null; n.border = 2; n.lineStyle = 'solid';
+      n.emoji = ''; n.image = '';
+    }
     d.nodes[n.id] = n;
     (src.children || []).forEach(c => { const k = clone(c, n.id); if (k) n.children.push(k.id); });
     return n;
@@ -261,6 +265,13 @@ function pasteBranch(intoId) {
   N(intoId).collapsed = false;
   UI.selected = top.id;
   save(); render();
+}
+function newMainNode() {
+  const d = doc();
+  pushUndo();
+  const n = addChild(d.root, '');
+  UI.selected = n.id;
+  save(); render(); editNode(n.id);
 }
 function cutBranch(id) {
   if (!N(id) || !N(id).parent) return toast('The central idea stays');
@@ -850,6 +861,13 @@ function fitView() {
    ===================================================================== */
 const pointers = new Map();
 let pan = null, nodeDrag = null, pinch = null;
+let lpTimer = null, lpStart = null, lastCtxAt = 0;
+
+function cancelGestures() {
+  clearTimeout(lpTimer); lpTimer = null; lpStart = null;
+  pan = null; pinch = null; pointers.clear();
+  if (nodeDrag) { nodeDrag = null; dragOffset = null; render(); }
+}
 
 function canvasSetup() {
   const canvas = $('#canvas');
@@ -874,6 +892,21 @@ function canvasSetup() {
     }
     const nodeEl = e.target.closest('.node');
     canvas.setPointerCapture(e.pointerId);
+
+    /* touch and pen: hold still for half a second to get the menu */
+    if (e.pointerType !== 'mouse') {
+      lpStart = { x: e.clientX, y: e.clientY };
+      clearTimeout(lpTimer);
+      lpTimer = setTimeout(() => {
+        lpTimer = null;
+        if (Date.now() - lastCtxAt < 700) return;   // the browser already offered one
+        const target = nodeEl ? nodeEl.dataset.id : null;
+        const at = lpStart;
+        cancelGestures();
+        if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { } }
+        openContextMenu(at.x, at.y, target);
+      }, 520);
+    }
     if (nodeEl && !editing) {
       const id = nodeEl.dataset.id;
       nodeDrag = { id, sx: e.clientX, sy: e.clientY, moved: false, ids: new Set([id, ...descendants(id)]) };
@@ -884,6 +917,9 @@ function canvasSetup() {
 
   canvas.addEventListener('pointermove', e => {
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (lpTimer && lpStart && Math.hypot(e.clientX - lpStart.x, e.clientY - lpStart.y) > 8) {
+      clearTimeout(lpTimer); lpTimer = null;
+    }
 
     if (pinch && pointers.size === 2) {
       const [a, b] = [...pointers.values()];
@@ -920,6 +956,7 @@ function canvasSetup() {
   });
 
   const finish = e => {
+    clearTimeout(lpTimer); lpTimer = null;
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
 
@@ -958,6 +995,22 @@ function canvasSetup() {
     if (e.ctrlKey || e.metaKey) zoomBy(e.deltaY > 0 ? 0.92 : 1.08, e.clientX, e.clientY);
     else { const c = cam(); c.x -= e.deltaX; c.y -= e.deltaY; applyCam(); save(); }
   }, { passive: false });
+
+  canvas.addEventListener('contextmenu', e => {
+    if (editing) return;                       // let the browser handle text fields
+    e.preventDefault();
+    lastCtxAt = Date.now();
+    const el = e.target.closest('.node');
+    const at = { x: e.clientX, y: e.clientY };
+    const target = el ? el.dataset.id : null;
+    cancelGestures();
+    openContextMenu(at.x, at.y, target);
+  });
+
+  document.addEventListener('pointerdown', e => {
+    if ($('#ctx') && !e.target.closest('#ctx')) closeContextMenu();
+  }, true);
+  window.addEventListener('blur', closeContextMenu);
 
   canvas.addEventListener('pointerover', e => {
     const el = e.target.closest('.node');
@@ -1040,6 +1093,95 @@ function handleNodeTap(id) {
   lastTap = { id, t: now };
   UI.selected = id;
   render();
+}
+
+/* =====================================================================
+   Context menu — right click on a desktop, long press on a touch screen.
+   ===================================================================== */
+function closeContextMenu() {
+  const m = $('#ctx');
+  if (m) m.remove();
+}
+function openContextMenu(x, y, id) {
+  closeContextMenu();
+  if (editing) return;
+  const d = doc();
+  const menu = document.createElement('div');
+  menu.id = 'ctx';
+  menu.setAttribute('role', 'menu');
+
+  const item = (label, fn, opts = {}) => {
+    if (opts.skip) return;
+    const b = document.createElement('button');
+    b.className = 'ctx-item' + (opts.danger ? ' danger' : '');
+    b.textContent = label;
+    b.setAttribute('role', 'menuitem');
+    if (opts.hint) {
+      const k = document.createElement('span');
+      k.className = 'ctx-key';
+      k.textContent = opts.hint;
+      b.appendChild(k);
+    }
+    if (opts.disabled) { b.disabled = true; }
+    else b.addEventListener('click', () => { closeContextMenu(); fn(); });
+    menu.appendChild(b);
+  };
+  const sep = () => { const s2 = document.createElement('div'); s2.className = 'ctx-sep'; menu.appendChild(s2); };
+
+  if (id && N(id)) {
+    const n = N(id), isRoot = id === d.root, st = taskState(id);
+    UI.selected = id;
+    const head = document.createElement('div');
+    head.className = 'ctx-head';
+    head.textContent = n.text || 'Untitled node';
+    menu.appendChild(head);
+
+    item('Edit title', () => editNode(id), { hint: 'F2' });
+    item('Add child', () => newChild(id), { hint: 'Tab' });
+    item('Add sibling', () => newSibling(id), { hint: 'Enter', skip: isRoot });
+    item('New parent', () => createParent(id), { skip: isRoot });
+    sep();
+    item(n.collapsed ? 'Unfold branch' : 'Fold branch', () => { N(id).collapsed = !N(id).collapsed; save(); render(); },
+      { skip: !n.children.length, hint: 'Space' });
+    item(st === 'done' ? 'Clear task' : 'Add task', () => { pushUndo(); setDone(id, st !== 'done'); UI.showTasks = true; save(); render(); }, { skip: isRoot });
+    item('Create connection', () => doAct('connect'));
+    item('Sort children A–Z', () => sortChildren(id), { skip: n.children.length < 2 });
+    sep();
+    item('Cut', () => cutBranch(id), { skip: isRoot });
+    item('Copy', () => copyBranch(id), { hint: 'Ctrl C' });
+    item('Paste into', () => pasteBranch(id), { disabled: !clipboard, hint: 'Ctrl V' });
+    item('Paste and keep style', () => pasteBranch(id, false), { disabled: !clipboard });
+    item('Duplicate', () => duplicateNode(id), { skip: isRoot, hint: 'Ctrl D' });
+    sep();
+    item('Style and notes…', () => {
+      if (window.innerWidth > 900) { UI.inspector = true; UI.inspTab = 'style'; }
+      else UI.sheetTab = 'style';
+      save(); render();
+    });
+    item('Delete', () => deleteSelected(), { danger: true, skip: isRoot, hint: 'Del' });
+  } else {
+    item('New main node', () => newMainNode());
+    item('Paste', () => pasteBranch(d.root, true), { disabled: !clipboard });
+    item('Paste and keep style', () => pasteBranch(d.root, false), { disabled: !clipboard });
+    sep();
+    item('Zoom in', () => zoomBy(1.15));
+    item('Zoom out', () => zoomBy(0.87));
+    item('Zoom to fit', () => fitView());
+    sep();
+    item('Unfold everything', () => {
+      Object.values(d.nodes).forEach(n => { n.collapsed = false; });
+      save(); render();
+    });
+  }
+
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  const pad = 8;
+  const left = Math.max(pad, Math.min(x, window.innerWidth - r.width - pad));
+  const top = Math.max(pad, Math.min(y, window.innerHeight - r.height - pad));
+  menu.style.left = left + 'px';
+  menu.style.top = top + 'px';
+  if (id) render();
 }
 
 /* ---------------------------- text editing ------------------------- */
@@ -1168,6 +1310,7 @@ function keySetup() {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); $('#search').focus(); UI.sidebar = true; render(); return; }
     if (e.key === '/') { e.preventDefault(); UI.sidebar = true; render(); $('#search').focus(); return; }
     if (e.key === 'Escape') {
+      if ($('#ctx')) { closeContextMenu(); return; }
       if (connectFrom) { connectFrom = null; render(); }
       else if (UI.focusMode) { UI.focusMode = false; render(); }
       else if (UI.highlightTag) { UI.highlightTag = null; render(); }
@@ -1935,7 +2078,7 @@ function wire() {
       else render();
     }, 140);
   };
-  window.addEventListener('resize', onViewportChange);
+  window.addEventListener('resize', () => { closeContextMenu(); onViewportChange(); });
   window.addEventListener('orientationchange', onViewportChange);
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => {

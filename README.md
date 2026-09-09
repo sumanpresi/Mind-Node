@@ -103,6 +103,11 @@ bottom sit undo, cut, copy, duplicate, delete and redo. Everything you can do to
 is reachable without leaving the map. On a wide screen the same panels appear as tabs in
 the right-hand inspector instead.
 
+**Context menu** — right click anywhere on a PC, or press and hold on a phone or the
+Fold. On empty canvas you get: new main node, paste, paste and keep style, zoom in, zoom
+out, zoom to fit, unfold everything. On a node you get the full list of node actions.
+Holding still is what opens it; if your finger moves, it stays a pan.
+
 **Node actions** — edit title, add child, add sibling, wrap a node in a new parent, mark
 as a task, fold, create a connection, sort children A to Z, cut, copy, paste into,
 duplicate, delete, link to another document, and link to a web address.
