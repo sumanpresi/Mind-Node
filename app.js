@@ -52,6 +52,9 @@ let connectFrom = null;     // pending connection source
 let dragOffset = null;      // {ids:Set, dx, dy}
 let undoStack = [];
 let lastTap = { id: null, t: 0 };
+let deletedDocs = {};       // id -> time it was deleted, so sync does not resurrect it
+let contentSigs = {};       // id -> fingerprint, so panning does not count as an edit
+let workspaceSig = '';      // which documents exist, so deletes and imports are noticed too
 
 /* ------------------------- model constructors ---------------------- */
 function mkNode(parent, text) {
@@ -137,13 +140,46 @@ function setDone(id, val) {
 
 /* ------------------------------ persistence ------------------------ */
 let saveTimer = null;
+function contentSig(d) {
+  return JSON.stringify({ n: d.nodes, m: d.name, c: d.connections, t: d.tags, l: d.layout, r: d.root });
+}
+function wsSig() {
+  return S.order.join(',') + '|' + Object.keys(S.docs).sort().join(',') + '|' + Object.keys(deletedDocs).sort().join(',');
+}
+function primeSigs() {
+  contentSigs = {};
+  Object.values(S.docs).forEach(d => { contentSigs[d.id] = contentSig(d); });
+  workspaceSig = wsSig();
+}
 function save() {
-  if (doc()) doc().updated = Date.now();
+  const d = doc();
+  let changed = false;
+  const ws = wsSig();
+  if (ws !== workspaceSig) { workspaceSig = ws; changed = true; }
+  if (d) {
+    const sig = contentSig(d);
+    if (contentSigs[d.id] !== sig) {
+      contentSigs[d.id] = sig; d.updated = Date.now(); changed = true;
+      delete d.demo;
+    }
+  }
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    try { store.setItem(KEY, JSON.stringify({ docs: S.docs, order: S.order, active: S.active, ui: UI })); }
-    catch (e) { toast('Storage is full — export your work to a file.'); }
+    try {
+      store.setItem(KEY, JSON.stringify({
+        docs: S.docs, order: S.order, active: S.active, ui: UI, deleted: deletedDocs
+      }));
+    } catch (e) { toast('Storage is full — export your work to a file.'); }
   }, 250);
+  if (changed && window.MNSync) window.MNSync.touch();
+}
+function persistNow() {
+  clearTimeout(saveTimer);
+  try {
+    store.setItem(KEY, JSON.stringify({
+      docs: S.docs, order: S.order, active: S.active, ui: UI, deleted: deletedDocs
+    }));
+  } catch (e) { toast('Storage is full — export your work to a file.'); }
 }
 function load() {
   try {
@@ -154,10 +190,13 @@ function load() {
     S = { docs: data.docs, order: data.order, active: data.active || data.order[0] };
     if (!S.docs[S.active]) S.active = S.order[0];
     UI = Object.assign(UI, data.ui || {});
+    deletedDocs = data.deleted || {};
     Object.values(S.docs).forEach(d => {
       d.connections = d.connections || []; d.tags = d.tags || [];
       Object.values(d.nodes).forEach(n => { n.tags = n.tags || []; });
+      contentSigs[d.id] = contentSig(d);
     });
+    workspaceSig = wsSig();
     return true;
   } catch (e) { return false; }
 }
@@ -235,6 +274,7 @@ function renderDocList() {
       e.stopPropagation();
       if (S.order.length === 1) return toast('Keep at least one document');
       if (!confirm(`Delete "${d.name}"? This cannot be undone.`)) return;
+      deletedDocs[id] = Date.now();
       delete S.docs[id];
       S.order = S.order.filter(x => x !== id);
       if (S.active === id) S.active = S.order[0];
@@ -1358,10 +1398,12 @@ function seed() {
     });
   });
 
+  d.demo = true; d2.demo = true;      // sample maps: replaced when joining an existing workspace
   S.docs = { [d.id]: d, [d2.id]: d2 };
   S.order = [d.id, d2.id];
   S.active = d.id;
   UI.showTasks = false;
+  primeSigs();                        // opening them is not an edit, so they stay samples
 }
 
 /* =====================================================================
@@ -1376,8 +1418,10 @@ function wire() {
 
   $('#newDoc').addEventListener('click', () => {
     const d = mkDoc('Untitled map');
+    d.updated = Date.now();
     S.docs[d.id] = d; S.order.push(d.id);
     openDoc(d.id);
+    if (window.MNSync) window.MNSync.touch();
     toast('New document ready');
   });
 
@@ -1462,6 +1506,56 @@ function wire() {
   canvasSetup();
   keySetup();
 }
+
+/* =====================================================================
+   Interface used by sync.js. Nothing else reaches into the app state.
+   ===================================================================== */
+window.MNApp = {
+  /* everything worth sending, minus each device's own camera position */
+  snapshot(exclude) {
+    const skip = new Set(exclude || []);
+    const docs = {};
+    for (const [id, d] of Object.entries(S.docs)) {
+      if (skip.has(id)) continue;
+      const copy = Object.assign({}, d);
+      delete copy.cam;
+      docs[id] = copy;
+    }
+    return { docs, order: S.order.filter(id => !skip.has(id)), deleted: deletedDocs };
+  },
+
+  /* the starter maps, while they are still untouched */
+  sampleIds: () => Object.values(S.docs).filter(d => d.demo).map(d => d.id),
+
+  /* take the server's version of the workspace; returns false if it was skipped */
+  merge(state) {
+    if (editing) return false;
+    if (!state || !state.docs || !Object.keys(state.docs).length) return false;
+
+    const cams = {};
+    for (const [id, d] of Object.entries(S.docs)) if (d.cam) cams[id] = d.cam;
+
+    const docs = {};
+    for (const [id, d] of Object.entries(state.docs)) {
+      if (cams[id]) d.cam = cams[id];
+      docs[id] = d;
+    }
+    S.docs = docs;
+    S.order = (state.order || []).filter(id => docs[id]);
+    for (const id of Object.keys(docs)) if (!S.order.includes(id)) S.order.push(id);
+    deletedDocs = state.deleted || {};
+
+    if (!S.docs[S.active]) { S.active = S.order[0]; UI.selected = null; }
+    if (UI.selected && S.docs[S.active] && !S.docs[S.active].nodes[UI.selected]) UI.selected = null;
+    primeSigs();
+    persistNow();
+    render();
+    return true;
+  },
+
+  isBusy: () => !!editing,
+  toast: msg => toast(msg)
+};
 
 /* ------------------------------- start ----------------------------- */
 if (!load()) { seed(); save(); }

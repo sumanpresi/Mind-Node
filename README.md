@@ -1,8 +1,11 @@
 # MindNote
 
-A mind map and outline workspace that runs entirely in the browser. No server, no
-sign-in, no build step. Your documents are stored on the device you are using, and you
-can export them to a file at any time.
+A mind map and outline workspace that runs in the browser, with your documents kept in
+step across every device you use. No sign-in and no build step: you type one workspace
+code on each device and they share the same maps.
+
+Edits are saved on the device first and sent up a couple of seconds later, so the app
+keeps working on a train with no signal and catches up when the connection returns.
 
 ## Files in this folder
 
@@ -11,26 +14,69 @@ can export them to a file at any time.
 | `index.html` | The page |
 | `styles.css` | All styling, including the screen sizes below |
 | `app.js` | All behaviour |
+| `sync.js` | Keeps this device in step with the others |
 | `manifest.json` | Lets phones and tablets install it as an app |
+| `api/sync.js` | The small service on Vercel that holds the shared copy |
 
-Four files, nothing else needed.
+Keep `api/sync.js` inside a folder called `api`. Vercel turns anything in that folder
+into a working web service on its own.
 
 ## Put it on GitHub and Vercel
 
 1. Go to github.com and choose **New repository**. Name it `mindnote`, keep it public
    or private, and create it.
-2. On the new repository page choose **uploading an existing file**, then drag the four
-   files above into the browser window. Do not drag the folder itself — drag the files
-   that are inside it. Press **Commit changes**.
+2. On the new repository page choose **uploading an existing file**. Drag in the five
+   loose files *and* the `api` folder. Do not drag the outer `mindnote` folder itself —
+   drag what is inside it. Press **Commit changes**.
 3. Go to vercel.com, sign in with GitHub, choose **Add New → Project**, and pick the
    `mindnote` repository.
-4. Leave every setting alone. Framework Preset will say **Other**, which is correct for
-   a plain HTML page. Press **Deploy**.
+4. Leave every setting alone. Framework Preset will say **Other**, which is correct
+   here. Press **Deploy**.
 5. After about half a minute Vercel gives you an address such as
    `mindnote-yourname.vercel.app`. Open it on any device.
 
+At this point the app works, but only on the device in front of you. The next section
+switches sync on.
+
 To change something later, edit the file on GitHub (or upload a new copy of it) and
 Vercel redeploys within a minute.
+
+## Turn on sync
+
+The shared copy lives in a Redis database. Vercel provisions one for you and hands the
+password to your project automatically, so there is nothing to copy or paste.
+
+1. Open your project on vercel.com and go to the **Storage** tab.
+2. Choose **Create Database**, pick a **Redis** provider from the Marketplace —
+   **Upstash** is the usual one — and accept the free plan. Give it any name.
+3. When it asks which project to connect it to, choose `mindnote` and connect it. Vercel
+   adds the connection details to your project as environment variables.
+4. Go to the **Deployments** tab, open the most recent deployment's menu and choose
+   **Redeploy**. A deployment only picks up new environment variables when it is rebuilt.
+5. Open your app, press the **Sync is off** strip at the bottom of the documents panel,
+   press **New code**, then **Turn on sync**. Write the code down.
+6. On your next device, open the same address, press the same strip, type the same code
+   and press **Turn on sync**. Both devices now share the same documents.
+
+The strip shows a green dot and "Synced just now" when everything is up to date, amber
+while sending, and orange when there is no connection.
+
+### Things worth knowing about sync
+
+- **The code is the password.** Anyone who types it sees these documents. Pick the
+  generated one rather than something guessable, and do not put it in a shared note.
+- **Joining replaces the starter maps.** When a device with only the two sample maps
+  joins a workspace that already has real documents, the samples are dropped rather than
+  added. Anything you have actually edited is always kept and merged in.
+- **If the same document is edited on two devices at once**, the version saved most
+  recently wins for that whole document. Editing different documents at the same time is
+  always safe.
+- **Deleting is deliberate.** A document deleted on one device disappears from the
+  others and does not come back.
+- **The view is per device.** Where you have panned and zoomed stays local, so the phone
+  does not drag the desktop around.
+- **Before step 3 is done**, the sync panel says storage is not connected yet, and the
+  app carries on working on that device alone.
 
 ## Screen sizes it is built for
 
@@ -111,6 +157,10 @@ at the bottom.
 
 ## Where your work lives
 
-Documents are saved in the browser's local storage on the device you used, so a map made
-on the phone will not appear on the PC. Use **Export** in the sidebar to save a `.json`
-backup and **Import** to bring it into another device or browser.
+Every device keeps a full copy of your documents in its own browser storage, which is
+what makes the app usable offline. With sync on, that copy is reconciled with the shared
+one on Vercel every few seconds and whenever you return to the tab.
+
+**Export** in the sidebar still saves a `.json` backup of everything, and **Import**
+brings it back. Worth doing occasionally: browser storage can be cleared by the browser
+itself, and the free Redis plan is not a backup service.

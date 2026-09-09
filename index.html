@@ -46,6 +46,9 @@
         <button class="ghost-btn small" id="themeBtn">Dark</button>
       </div>
       <input type="file" id="importFile" accept="application/json" hidden />
+      <button class="sync-strip" id="syncBtn" data-state="off">
+        <span class="sync-dot"></span><span class="sync-text">Sync is off</span>
+      </button>
     </div>
   </aside>
 
@@ -152,9 +155,11 @@
   </main>
 
   <div id="scrim" hidden></div>
+  <div id="modal" hidden></div>
   <div id="toast" hidden></div>
 </div>
 
 <script src="app.js"></script>
+<script src="sync.js"></script>
 </body>
 </html>
