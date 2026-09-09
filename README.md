@@ -95,6 +95,13 @@ recalculates whenever the foldable is opened or closed.
 **Mind maps** — an infinite canvas. Drag the background to pan, pinch or `Ctrl` and
 scroll to zoom, **Fit** to frame everything.
 
+**Adding nodes** — point at any node, or tap it on a touch screen, and two round **+**
+buttons appear: one on the outer edge adds a child, one on the branch itself drops a new
+node in beside it. The new node opens for typing straight away, and if you leave it empty
+it removes itself. The same five actions — add child, add sibling, fold, connect, delete —
+sit next to the Map and Outline switch at the top, and along the bottom of the screen on
+a phone. They wake up as soon as a node is selected.
+
 **Outlines** — the same document as a structured list. Switch with **Map / Outline** in
 the toolbar. Edits in one view show up in the other.
 
@@ -146,6 +153,7 @@ opens the right one, unfolds the path and centres on the match.
 | `Tab` | New child |
 | `Enter` | New sibling |
 | `Space` | Edit the selected node |
+| `Esc` while typing | Discard what you just typed |
 | Arrow keys | Move between nodes |
 | `Delete` | Delete the node and its branch |
 | `Ctrl` / `Cmd` + `Z` | Undo |

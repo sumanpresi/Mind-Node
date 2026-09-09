@@ -67,36 +67,54 @@
         <button class="seg-btn" data-view="outline" role="tab">Outline</button>
       </div>
 
-      <div class="tools" id="tools">
-        <button class="icon-btn tool" data-toggle="showTasks" title="Tasks">
-          <svg viewBox="0 0 20 20" class="ic"><circle cx="10" cy="10" r="7"/><path d="M6.8 10.2l2.2 2.2 4.2-4.6"/></svg>
-        </button>
-        <button class="icon-btn tool" data-toggle="showNotes" title="Notes">
-          <svg viewBox="0 0 20 20" class="ic"><rect x="4" y="3" width="12" height="14" rx="2"/><path d="M7 7h6M7 10h6M7 13h4"/></svg>
-        </button>
-        <button class="icon-btn tool" data-toggle="showImages" title="Images, stickers and emoji">
-          <svg viewBox="0 0 20 20" class="ic"><rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.4"/><path d="M4 14l4-4 3.5 3.5L14 11l2 2"/></svg>
-        </button>
-        <button class="icon-btn tool" data-toggle="showTags" title="Tags">
-          <svg viewBox="0 0 20 20" class="ic"><path d="M3 8.5V4h4.5l8.5 8.5-4.5 4.5L3 8.5z"/><circle cx="6.6" cy="6.6" r="1.1"/></svg>
-        </button>
-        <button class="icon-btn tool" id="connectBtn" title="Draw a connection">
-          <svg viewBox="0 0 20 20" class="ic"><path d="M8 12l4-4"/><path d="M11.5 5.5a3 3 0 014.2 4.2l-1.8 1.8"/><path d="M8.5 14.5a3 3 0 01-4.2-4.2l1.8-1.8"/></svg>
-        </button>
-        <button class="icon-btn tool" data-toggle="focusMode" title="Focus mode">
-          <svg viewBox="0 0 20 20" class="ic"><circle cx="10" cy="10" r="3"/><path d="M3 6V3h3M17 6V3h-3M3 14v3h3M17 14v3h-3"/></svg>
-        </button>
-        <button class="icon-btn tool" id="foldBtn" title="Fold everything">
-          <svg viewBox="0 0 20 20" class="ic"><path d="M4 10h9"/><path d="M13 7l3 3-3 3"/></svg>
-        </button>
+      <div class="strip" id="strip">
+        <div class="acts" id="acts">
+          <button class="icon-btn act" data-act="child" title="Add child (Tab)" aria-label="Add child">
+            <svg viewBox="0 0 20 20" class="ic"><rect x="2" y="6.5" width="7" height="7" rx="2"/><path d="M9 10h2.5"/><path d="M14.5 7.5v5M12 10h5"/></svg>
+          </button>
+          <button class="icon-btn act" data-act="sibling" title="Add sibling (Enter)" aria-label="Add sibling">
+            <svg viewBox="0 0 20 20" class="ic"><rect x="6.5" y="2" width="7" height="7" rx="2"/><path d="M10 9v2.5"/><path d="M7.5 14.5h5M10 12v5"/></svg>
+          </button>
+          <button class="icon-btn act" data-act="fold" title="Fold or unfold" aria-label="Fold or unfold">
+            <svg viewBox="0 0 20 20" class="ic"><path d="M6 4.5l4 4 4-4"/><path d="M6 11.5l4 4 4-4"/></svg>
+          </button>
+          <button class="icon-btn act" id="connectBtn" data-act="connect" title="Connect to another node" aria-label="Connect to another node">
+            <svg viewBox="0 0 20 20" class="ic"><path d="M8 12l4-4"/><path d="M11.5 5.5a3 3 0 014.2 4.2l-1.8 1.8"/><path d="M8.5 14.5a3 3 0 01-4.2-4.2l1.8-1.8"/></svg>
+          </button>
+          <button class="icon-btn act danger-btn" data-act="delete" title="Delete node" aria-label="Delete node">
+            <svg viewBox="0 0 20 20" class="ic"><path d="M4 6h12"/><path d="M8 6V4h4v2"/><path d="M6 6l.8 10h6.4L14 6"/></svg>
+          </button>
+        </div>
+
         <div class="tool-sep"></div>
-        <select id="layoutSel" class="mini-sel" title="Layout" aria-label="Layout">
-          <option value="horizontal">Horizontal</option>
-          <option value="vertical">Vertical</option>
-          <option value="compact">Compact</option>
-          <option value="radial">Radial</option>
-          <option value="manual">Manual</option>
-        </select>
+
+        <div class="tools" id="tools">
+          <button class="icon-btn tool" data-toggle="showTasks" title="Tasks">
+            <svg viewBox="0 0 20 20" class="ic"><circle cx="10" cy="10" r="7"/><path d="M6.8 10.2l2.2 2.2 4.2-4.6"/></svg>
+          </button>
+          <button class="icon-btn tool" data-toggle="showNotes" title="Notes">
+            <svg viewBox="0 0 20 20" class="ic"><rect x="4" y="3" width="12" height="14" rx="2"/><path d="M7 7h6M7 10h6M7 13h4"/></svg>
+          </button>
+          <button class="icon-btn tool" data-toggle="showImages" title="Images, stickers and emoji">
+            <svg viewBox="0 0 20 20" class="ic"><rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.4"/><path d="M4 14l4-4 3.5 3.5L14 11l2 2"/></svg>
+          </button>
+          <button class="icon-btn tool" data-toggle="showTags" title="Tags">
+            <svg viewBox="0 0 20 20" class="ic"><path d="M3 8.5V4h4.5l8.5 8.5-4.5 4.5L3 8.5z"/><circle cx="6.6" cy="6.6" r="1.1"/></svg>
+          </button>
+          <button class="icon-btn tool" data-toggle="focusMode" title="Focus mode">
+            <svg viewBox="0 0 20 20" class="ic"><circle cx="10" cy="10" r="3"/><path d="M3 6V3h3M17 6V3h-3M3 14v3h3M17 14v3h-3"/></svg>
+          </button>
+          <button class="icon-btn tool" id="foldBtn" title="Fold everything">
+            <svg viewBox="0 0 20 20" class="ic"><path d="M4 10h9"/><path d="M13 7l3 3-3 3"/></svg>
+          </button>
+          <select id="layoutSel" class="mini-sel" title="Layout" aria-label="Layout">
+            <option value="horizontal">Horizontal</option>
+            <option value="vertical">Vertical</option>
+            <option value="compact">Compact</option>
+            <option value="radial">Radial</option>
+            <option value="manual">Manual</option>
+          </select>
+        </div>
       </div>
 
       <button class="icon-btn" id="inspectorBtn" title="Style inspector" aria-label="Style inspector">
@@ -148,7 +166,8 @@
     <div id="mobilebar" hidden>
       <button data-act="child">+ Child</button>
       <button data-act="sibling">+ Sibling</button>
-      <button data-act="note">Note</button>
+      <button data-act="fold">Fold</button>
+      <button data-act="connect">Link</button>
       <button data-act="style">Style</button>
       <button data-act="delete">Delete</button>
     </div>

@@ -55,6 +55,7 @@ let lastTap = { id: null, t: 0 };
 let deletedDocs = {};       // id -> time it was deleted, so sync does not resurrect it
 let contentSigs = {};       // id -> fingerprint, so panning does not count as an edit
 let workspaceSig = '';      // which documents exist, so deletes and imports are noticed too
+let hoverId = null;         // node the pointer is over, for the + handles
 
 /* ------------------------- model constructors ---------------------- */
 function mkNode(parent, text) {
@@ -227,8 +228,7 @@ function toast(msg) {
 function render() {
   if (editing) {
     // still genuinely editing? if the field vanished, recover instead of freezing
-    const live = document.querySelector(`.node[data-id="${editing}"] .txt[contenteditable="true"]`) ||
-                 document.querySelector(`[data-txt="${editing}"][contenteditable="true"]`);
+    const live = document.querySelector('[data-editing="1"]');
     if (live) return;
     editing = null;
   }
@@ -241,6 +241,7 @@ function render() {
   $('#layoutSel').value = d.layout;
   $$('.seg-btn').forEach(b => b.classList.toggle('is-on', b.dataset.view === UI.view));
   $$('.tool[data-toggle]').forEach(b => b.classList.toggle('is-on', !!UI[b.dataset.toggle]));
+  $$('.act').forEach(b => { b.disabled = !UI.selected; });
   $('#connectBtn').classList.toggle('is-on', !!connectFrom);
   $('#connectHint').hidden = !connectFrom;
   $('#canvas').hidden = UI.view !== 'map';
@@ -344,11 +345,59 @@ function renderMap() {
     layer.appendChild(b);
   });
 
+  buildHandles();
   applyDimming(visible);
   drawEdges(visible);
   applyCam();
+  positionHandles();
 }
 
+/* Two round + buttons that follow the node under the pointer: one adds a
+   child on the outer edge, one drops a sibling in on the branch itself.
+   Both open the new node for typing straight away. */
+function buildHandles() {
+  const layer = $('#nodes');
+  ['child', 'sibling'].forEach(kind => {
+    const b = document.createElement('button');
+    b.className = 'add-handle';
+    b.id = 'h-' + kind;
+    b.dataset.add = kind;
+    b.textContent = '+';
+    b.title = kind === 'child' ? 'Add a child here' : 'Add a node here';
+    layer.appendChild(b);
+  });
+}
+function positionHandles() {
+  const kid = $('#h-child'), sib = $('#h-sibling');
+  if (!kid || !sib) return;
+  const id = (hoverId && P[hoverId]) ? hoverId : ((UI.selected && P[UI.selected]) ? UI.selected : null);
+  if (!id || editing || nodeDrag || connectFrom) {
+    kid.classList.remove('show'); sib.classList.remove('show');
+    return;
+  }
+  const d = doc(), p = P[id], vertical = d.layout === 'vertical', side = sideOf(id);
+  kid.dataset.for = id; sib.dataset.for = id;
+
+  if (vertical) {
+    kid.style.left = (p.x + p.w / 2 - 11) + 'px';
+    kid.style.top = (p.y + p.h - 8) + 'px';
+    sib.style.left = (p.x + p.w - 8) + 'px';
+    sib.style.top = (p.y + p.h / 2 - 11) + 'px';
+  } else {
+    kid.style.left = (side > 0 ? p.x + p.w - 8 : p.x - 14) + 'px';
+    kid.style.top = (p.y + p.h / 2 - 11) + 'px';
+    sib.style.left = (side > 0 ? p.x - 8 : p.x + p.w - 14) + 'px';
+    sib.style.top = (p.y + p.h - 8) + 'px';
+  }
+  kid.classList.add('show');
+  sib.classList.toggle('show', !!N(id).parent);
+}
+
+function sideOf(id) {
+  const n = N(id);
+  if (!n.parent || !P[n.parent] || !P[id]) return 1;
+  return P[id].x >= P[n.parent].x ? 1 : -1;
+}
 function childSide(id) {
   const kids = visKids(N(id));
   if (!kids.length) return 1;
@@ -378,7 +427,7 @@ function buildNodeEl(id) {
   }
   const txt = document.createElement('span');
   txt.className = 'txt';
-  txt.textContent = n.text || 'Untitled';
+  txt.textContent = n.text;
   el.appendChild(txt);
 
   const meta = [];
@@ -684,7 +733,8 @@ function canvasSetup() {
     const taskBtn = e.target.closest('[data-task]');
     const noteIc = e.target.closest('[data-note]');
     const linkIc = e.target.closest('[data-link]');
-    if (foldBtn || taskBtn || noteIc || linkIc) return;
+    const addBtn = e.target.closest('[data-add]');
+    if (foldBtn || taskBtn || noteIc || linkIc || addBtn) return;
 
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
@@ -735,6 +785,7 @@ function canvasSetup() {
       $$('#nodes .node.is-drop').forEach(el => el.classList.remove('is-drop'));
       if (target) $(`#nodes .node[data-id="${target}"]`).classList.add('is-drop');
       nodeDrag.target = target;
+      positionHandles();
       drawEdges(Object.keys(P));
     }
   });
@@ -778,6 +829,13 @@ function canvasSetup() {
     else { const c = cam(); c.x -= e.deltaX; c.y -= e.deltaY; applyCam(); save(); }
   }, { passive: false });
 
+  canvas.addEventListener('pointerover', e => {
+    const el = e.target.closest('.node');
+    const id = el ? el.dataset.id : null;
+    if (id !== hoverId) { hoverId = id; positionHandles(); }
+  });
+  canvas.addEventListener('pointerleave', () => { hoverId = null; positionHandles(); });
+
   canvas.addEventListener('dblclick', e => {
     const el = e.target.closest('.node');
     if (el) editNode(el.dataset.id);
@@ -801,6 +859,14 @@ function canvasSetup() {
     if (note) { UI.selected = note.dataset.note; UI.inspector = true; render(); return; }
     const link = e.target.closest('[data-link]');
     if (link) { const t = N(link.dataset.link).link; if (S.docs[t]) openDoc(t); return; }
+    const add = e.target.closest('[data-add]');
+    if (add) {
+      const id = add.dataset.for;
+      if (!id || !N(id)) return;
+      UI.selected = id;
+      if (add.dataset.add === 'child') newChild(id); else newSibling(id);
+      return;
+    }
   });
 }
 
@@ -841,6 +907,10 @@ function handleNodeTap(id) {
 }
 
 /* ---------------------------- text editing ------------------------- */
+function readText(el) {
+  const t = (el.innerText != null) ? el.innerText : el.textContent;
+  return (t || '');
+}
 function editNode(id) {
   if (editing === id) return;
   const el = $(`#nodes .node[data-id="${id}"] .txt`) || $(`#outline [data-txt="${id}"]`);
@@ -849,6 +919,7 @@ function editNode(id) {
   const wrap = el.closest('.node');
   if (wrap) wrap.classList.add('editing');
   el.contentEditable = 'true';
+  el.dataset.editing = '1';
   el.focus();
   const r = document.createRange();
   r.selectNodeContents(el);
@@ -857,10 +928,18 @@ function editNode(id) {
   const done = commit => {
     el.removeEventListener('blur', onBlur);
     el.removeEventListener('keydown', onKey);
-    const text = el.innerText.replace(/\s+$/, '');
+    const text = readText(el).replace(/\s+$/, '');
     editing = null;
     if (commit) {
-      N(id).text = text;
+      const node = N(id);
+      if (!text.trim() && node && node.parent && !node.children.length) {
+        const parent = node.parent;      // a node left blank was never really wanted
+        removeNode(id);
+        UI.selected = parent;
+        save(); render();
+        return;
+      }
+      if (node) node.text = text;
       if (id === doc().root) doc().name = text || 'Untitled';
       save();
     }
@@ -897,6 +976,21 @@ function deleteSelected() {
   removeNode(id);
   UI.selected = p;
   save(); render();
+}
+
+function doAct(act) {
+  const id = UI.selected;
+  if (!id || !N(id)) return;
+  if (act === 'child') newChild(id);
+  else if (act === 'sibling') newSibling(id);
+  else if (act === 'fold') { N(id).collapsed = !N(id).collapsed; save(); render(); }
+  else if (act === 'connect') {
+    connectFrom = connectFrom ? null : id;
+    if (connectFrom) toast('Now tap the other node');
+    render();
+  }
+  else if (act === 'delete') deleteSelected();
+  else { UI.inspector = true; render(); }
 }
 
 /* ----------------------------- keyboard ---------------------------- */
@@ -1013,12 +1107,13 @@ function olNode(id, lvl) {
 function editOutline(id, el) {
   editing = id;
   el.contentEditable = 'true';
+  el.dataset.editing = '1';
   el.textContent = N(id).text;
   el.focus();
   const done = commit => {
     el.removeEventListener('blur', onBlur);
     el.removeEventListener('keydown', onKey);
-    const t = el.innerText.trim();
+    const t = readText(el).trim();
     editing = null;
     if (commit) { N(id).text = t; save(); }
     render();
@@ -1154,7 +1249,7 @@ function renderInspector() {
     chipBtn('Add child', () => newChild(id)),
     chipBtn('Add sibling', () => newSibling(id)),
     chipBtn(N(id).collapsed ? 'Unfold' : 'Fold', () => { N(id).collapsed = !N(id).collapsed; save(); render(); }),
-    chipBtn('Connect to…', () => { connectFrom = id; toast('Now tap the other node'); render(); }),
+    chipBtn('Connect to…', () => doAct('connect')),
     chipBtn('Delete', () => deleteSelected(), false, true)
   ])));
 }
@@ -1447,12 +1542,6 @@ function wire() {
     save(); render();
   }));
 
-  $('#connectBtn').addEventListener('click', () => {
-    connectFrom = connectFrom ? null : (UI.selected || 'PICK');
-    if (connectFrom === 'PICK') { connectFrom = null; toast('Select a node first, then tap the link tool'); }
-    render();
-  });
-
   $('#foldBtn').addEventListener('click', () => {
     const d = doc();
     const anyOpen = Object.values(d.nodes).some(n => n.children.length && !n.collapsed && n.id !== d.root);
@@ -1488,13 +1577,14 @@ function wire() {
     e.target.value = '';
   });
 
+  $('#acts').addEventListener('click', e => {
+    const b = e.target.closest('[data-act]');
+    if (b && !b.disabled) doAct(b.dataset.act);
+  });
+
   $('#mobilebar').addEventListener('click', e => {
-    const act = e.target.dataset.act;
-    if (!act || !UI.selected) return;
-    if (act === 'child') newChild(UI.selected);
-    else if (act === 'sibling') newSibling(UI.selected);
-    else if (act === 'delete') deleteSelected();
-    else { UI.inspector = true; render(); }
+    const b = e.target.closest('[data-act]');
+    if (b) doAct(b.dataset.act);
   });
 
   let rt = null;
