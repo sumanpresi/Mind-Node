@@ -18,11 +18,14 @@ const REDIS_TOKEN =
   process.env.UPSTASH_REDIS_REST_TOKEN ||
   process.env.REDIS_REST_API_TOKEN || '';
 
-const MAX_BYTES = 3 * 1024 * 1024;          // refuse anything bigger
-const TTL_SECONDS = 60 * 60 * 24 * 365;      // a year after the last write
+/* The workspace itself never expires. Losing a year of notes because the
+   app went unopened would be the worst thing this service could do. */
+const MAX_BYTES = 8 * 1024 * 1024;           // well inside the 10 MB request limit
 const HISTORY_KEEP = 10;                     // versions kept for recovery
 const HISTORY_EVERY = 10 * 60 * 1000;        // at most one version per 10 minutes
-const HISTORY_MAX_BYTES = 1024 * 1024;       // do not archive very large workspaces
+const HISTORY_MAX_BYTES = 2 * 1024 * 1024;   // do not archive very large workspaces
+const HISTORY_TTL = 60 * 60 * 24 * 730;      // the trail itself is dropped after two years
+const SCHEMA = 1;
 
 async function redis(command) {
   const r = await fetch(REDIS_URL, {
@@ -44,7 +47,7 @@ function cleanCode(code) {
 const keyFor = code => 'mindnote:' + code;
 const histKeyFor = code => 'mindnote:' + code + ':history';
 
-const empty = () => ({ docs: {}, order: [], deleted: {}, rev: 0 });
+const empty = () => ({ docs: {}, order: [], deleted: {}, rev: 0, schemaVersion: SCHEMA });
 
 /* newest whole document wins; a deletion wins if it happened later */
 function merge(base, incoming) {
@@ -66,7 +69,11 @@ function merge(base, incoming) {
     if (docs[id] && !order.includes(id)) order.push(id);
   }
   for (const id of Object.keys(docs)) if (!order.includes(id)) order.push(id);
-  return { docs, order, deleted, rev: (base.rev || 0) + 1 };
+  return {
+    docs, order, deleted,
+    rev: (base.rev || 0) + 1,
+    schemaVersion: incoming.schemaVersion || base.schemaVersion || SCHEMA
+  };
 }
 
 /* Keep a short trail of earlier versions so a mistaken edit or deletion
@@ -76,7 +83,7 @@ async function archive(code, state) {
   if (body.length > HISTORY_MAX_BYTES) return;
   await redis(['LPUSH', histKeyFor(code), body]);
   await redis(['LTRIM', histKeyFor(code), '0', String(HISTORY_KEEP - 1)]);
-  await redis(['EXPIRE', histKeyFor(code), String(TTL_SECONDS)]);
+  await redis(['EXPIRE', histKeyFor(code), String(HISTORY_TTL)]);
 }
 function describe(raw, index) {
   try {
@@ -150,7 +157,7 @@ module.exports = async (req, res) => {
         const now = await readState(code);
         await archive(code, now);
         const restored = Object.assign({}, wanted, { rev: (now.rev || 0) + 1, historyAt: Date.now() });
-        await redis(['SET', keyFor(code), JSON.stringify(restored), 'EX', String(TTL_SECONDS)]);
+        await redis(['SET', keyFor(code), JSON.stringify(restored)]);
         res.status(200).json({ ok: true, state: restored, restored: true });
         return;
       }
@@ -162,7 +169,10 @@ module.exports = async (req, res) => {
       const payload = JSON.stringify(merged);
 
       if (payload.length > MAX_BYTES) {
-        res.status(413).json({ ok: false, message: 'This workspace is too large to sync. Remove some images and try again.' });
+        res.status(413).json({
+          ok: false,
+          message: 'This workspace is too large to sync. Remove some images, or split it across documents.'
+        });
         return;
       }
 
@@ -176,8 +186,10 @@ module.exports = async (req, res) => {
         merged.historyAt = lastArchive;
       }
 
-      await redis(['SET', keyFor(code), JSON.stringify(merged), 'EX', String(TTL_SECONDS)]);
-      res.status(200).json({ ok: true, state: merged });
+      /* No expiry: the stored workspace outlives any gap in use. */
+      const finalBody = JSON.stringify(merged);
+      await redis(['SET', keyFor(code), finalBody]);
+      res.status(200).json({ ok: true, state: merged, bytes: finalBody.length, limit: MAX_BYTES });
       return;
     }
 

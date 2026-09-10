@@ -43,7 +43,12 @@ const KEY = 'mindnote.v1';
    simply falls back to the older store. localStorage is kept as a mirror
    while it fits, so an older build of the app still finds the data. */
 const DB_NAME = 'mindnote', DB_STORE = 'state', DB_KEY = 'workspace';
+const BACKUP_PREFIX = 'backup:';
+const BACKUP_KEEP = 10;                 // rolling local backups
+const BACKUP_EVERY = 20 * 60 * 60 * 1000;   // at most one a day, near enough
+const SCHEMA = 1;                       // bump when the saved shape changes
 let idbHandle = null, idbBroken = false;
+let schemaBlocked = false;
 
 function idbOpen() {
   if (idbBroken || typeof indexedDB === 'undefined') return Promise.reject(new Error('no indexeddb'));
@@ -60,21 +65,37 @@ function idbOpen() {
     req.onblocked = () => { idbBroken = true; rej(new Error('blocked')); };
   });
 }
-function idbGet() {
+function idbGet(key) {
   return idbOpen().then(db => new Promise((res, rej) => {
     const tx = db.transaction(DB_STORE, 'readonly');
-    const r = tx.objectStore(DB_STORE).get(DB_KEY);
+    const r = tx.objectStore(DB_STORE).get(key || DB_KEY);
     r.onsuccess = () => res(r.result || null);
     r.onerror = () => rej(r.error);
   }));
 }
-function idbSet(value) {
+function idbSet(value, key) {
   return idbOpen().then(db => new Promise((res, rej) => {
     const tx = db.transaction(DB_STORE, 'readwrite');
-    tx.objectStore(DB_STORE).put(value, DB_KEY);
+    tx.objectStore(DB_STORE).put(value, key || DB_KEY);
     tx.oncomplete = () => res(true);
     tx.onerror = () => rej(tx.error);
     tx.onabort = () => rej(tx.error || new Error('aborted'));
+  }));
+}
+function idbDel(key) {
+  return idbOpen().then(db => new Promise((res, rej) => {
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    tx.objectStore(DB_STORE).delete(key);
+    tx.oncomplete = () => res(true);
+    tx.onerror = () => rej(tx.error);
+  }));
+}
+function idbKeys() {
+  return idbOpen().then(db => new Promise((res, rej) => {
+    const tx = db.transaction(DB_STORE, 'readonly');
+    const r = tx.objectStore(DB_STORE).getAllKeys();
+    r.onsuccess = () => res(r.result || []);
+    r.onerror = () => rej(r.error);
   }));
 }
 
@@ -220,6 +241,58 @@ function setDone(id, val) {
   descendants(id).forEach(c => { N(c).done = val; });
 }
 
+/* =====================================================================
+   Rolling local backups. One a day at most, ten kept, held in the same
+   database as the working copy. This is the net for "I deleted something
+   three weeks ago and only noticed now".
+   ===================================================================== */
+async function listBackups() {
+  try {
+    const keys = await idbKeys();
+    return keys.filter(k => typeof k === 'string' && k.startsWith(BACKUP_PREFIX))
+      .sort().reverse();
+  } catch (e) { return []; }
+}
+async function maybeBackup() {
+  if (schemaBlocked) return;
+  try {
+    const keys = await listBackups();
+    const newest = keys.length ? Number(keys[0].slice(BACKUP_PREFIX.length)) : 0;
+    if (Date.now() - newest < BACKUP_EVERY) return;
+    const body = JSON.stringify({
+      app: 'MindNote', schemaVersion: SCHEMA,
+      docs: S.docs, order: S.order, deleted: deletedDocs, savedAt: Date.now()
+    });
+    await idbSet(body, BACKUP_PREFIX + Date.now());
+    const after = await listBackups();
+    for (const old of after.slice(BACKUP_KEEP)) await idbDel(old);
+  } catch (e) { /* backups are best effort */ }
+}
+function describeBackup(key, raw) {
+  const when = Number(key.slice(BACKUP_PREFIX.length));
+  let documents = 0, nodes = 0, names = [];
+  try {
+    const st = JSON.parse(raw);
+    const list = Object.values(st.docs || {});
+    documents = list.length;
+    nodes = list.reduce((a, d) => a + Object.keys(d.nodes || {}).length, 0);
+    names = list.map(d => d.name).slice(0, 4);
+  } catch (e) { }
+  return { key, when, documents, nodes, names, bytes: raw ? raw.length : 0 };
+}
+async function restoreBackup(key) {
+  const raw = await idbGet(key);
+  if (!raw) return toast('That backup is no longer stored');
+  pushUndo();
+  if (!hydrate(raw)) return toast('That backup could not be read');
+  UI.selected = null;
+  primeSigs();
+  persistNow();
+  render();
+  if (window.MNSync && window.MNSync.isOn()) window.MNSync.now();
+  toast('Backup restored');
+}
+
 /* ------------------------------ persistence ------------------------ */
 let saveTimer = null;
 function contentSig(d) {
@@ -251,15 +324,25 @@ function save() {
 }
 function persistNow() {
   clearTimeout(saveTimer);
+  if (schemaBlocked) return;            // never write over data we do not understand
   storeSave(JSON.stringify({
+    app: 'MindNote', schemaVersion: SCHEMA,
     docs: S.docs, order: S.order, active: S.active, ui: UI, deleted: deletedDocs,
     savedAt: Date.now()
   }));
 }
+/* Older saves carry no version and are read as version 1. A save from a
+   newer version of MindNote than this one is left strictly alone: better a
+   clear message than a silent, lossy read. */
 function hydrate(raw) {
   try {
     if (!raw) return false;
     const data = JSON.parse(raw);
+    const found = data.schemaVersion || 1;
+    if (found > SCHEMA) {
+      schemaBlocked = true;
+      return false;
+    }
     if (!data.docs || !data.order || !data.order.length) return false;
     S = { docs: data.docs, order: data.order, active: data.active || data.order[0] };
     if (!S.docs[S.active]) S.active = S.order[0];
@@ -426,6 +509,7 @@ function themeMode() {
 }
 
 function render() {
+  if (!document.getElementById('app')) return;   // the page has been replaced
   if (editing) {
     // still genuinely editing? if the field vanished, recover instead of freezing
     const live = document.querySelector('[data-editing="1"]');
@@ -2038,17 +2122,32 @@ function download(name, text) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
+function stamp() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function envelope(docs, order) {
+  return JSON.stringify({
+    app: 'MindNote', kind: 'mindnote', schemaVersion: SCHEMA,
+    exportedAt: new Date().toISOString(), docs, order
+  }, null, 2);
+}
 function exportAll() {
-  download('mindnote-backup.json', JSON.stringify({ kind: 'mindnote', docs: S.docs, order: S.order }, null, 2));
+  download('mindnote-' + stamp() + '.json', envelope(S.docs, S.order));
   toast('Exported every document');
 }
 function exportDoc(d) {
-  download(d.name.replace(/[^\w\- ]/g, '') + '.json', JSON.stringify({ kind: 'mindnote', docs: { [d.id]: d }, order: [d.id] }, null, 2));
+  download(d.name.replace(/[^\w\- ]/g, '') + '-' + stamp() + '.json', envelope({ [d.id]: d }, [d.id]));
   toast('Exported this document');
 }
 function importJSON(text) {
   try {
     const data = JSON.parse(text);
+    if ((data.schemaVersion || 1) > SCHEMA) {
+      toast('That file was written by a newer version of MindNote');
+      return;
+    }
     if (!data.docs || !data.order) throw new Error('bad file');
     data.order.forEach(id => {
       const d = data.docs[id]; if (!d) return;
@@ -2061,6 +2160,96 @@ function importJSON(text) {
     toast('Import finished');
   } catch (e) {
     toast('That file is not a MindNote export');
+  }
+}
+
+/* =====================================================================
+   Data and backup panel
+   ===================================================================== */
+function bytesText(n) {
+  const kb = n / 1024;
+  return kb < 1024 ? kb.toFixed(1) + ' KB' : (kb / 1024).toFixed(2) + ' MB';
+}
+function agoText(ms) {
+  if (!ms) return 'unknown';
+  const mins = Math.round((Date.now() - ms) / 60000);
+  if (mins < 60) return mins < 1 ? 'just now' : mins + ' min ago';
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return hrs + (hrs === 1 ? ' hour ago' : ' hours ago');
+  const days = Math.round(hrs / 24);
+  return days + (days === 1 ? ' day ago' : ' days ago');
+}
+async function openDataPanel() {
+  const host = $('#modal');
+  host.hidden = false;
+  host.innerHTML = '';
+  const card = document.createElement('div');
+  card.className = 'modal-card';
+  const size = JSON.stringify({ docs: S.docs, order: S.order }).length;
+  const images = Object.values(S.docs).reduce((a, d) =>
+    a + Object.values(d.nodes).filter(n => n.image).length, 0);
+
+  card.innerHTML = `
+    <div class="modal-head">
+      <h3>Data and backup</h3>
+      <button class="icon-btn" data-close aria-label="Close">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-p">Your documents live on this device and, when sync is on, on the server too.
+      A file you keep yourself is the copy no service can take away.</p>
+      <div class="modal-actions">
+        <button class="solid-btn" data-export>Save a backup file</button>
+        <button class="chip" data-import>Open a backup file</button>
+      </div>
+      <p class="modal-note" id="dataSize"></p>
+      <div class="modal-label" style="margin-top:18px">Automatic backups on this device</div>
+      <p class="modal-note" style="margin-top:0">Taken about once a day, ten kept. They live in this
+      browser, so they survive a mistake but not a lost phone — keep a file as well.</p>
+      <div id="backupList"><p class="modal-note">Looking…</p></div>
+    </div>`;
+  host.appendChild(card);
+
+  const warn = size > 5 * 1024 * 1024 ? ' — getting large; images are the usual cause'
+    : size > 2 * 1024 * 1024 ? ' — comfortable, but worth watching' : '';
+  card.querySelector('#dataSize').textContent =
+    `${Object.keys(S.docs).length} documents · ${bytesText(size)}` +
+    (images ? ` · ${images} embedded image${images === 1 ? '' : 's'}` : '') + warn;
+
+  const close = () => { host.hidden = true; host.innerHTML = ''; };
+  host.addEventListener('click', e => { if (e.target === host) close(); });
+  card.querySelector('[data-close]').addEventListener('click', close);
+  card.querySelector('[data-export]').addEventListener('click', exportAll);
+  card.querySelector('[data-import]').addEventListener('click', () => $('#importFile').click());
+
+  const list = card.querySelector('#backupList');
+  const keys = await listBackups();
+  if (!keys.length) {
+    list.innerHTML = '<p class="modal-note">None yet. The first is taken shortly after you start using the app.</p>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const key of keys) {
+    let raw = null;
+    try { raw = await idbGet(key); } catch (e) { }
+    const info = describeBackup(key, raw);
+    const row = document.createElement('div');
+    row.className = 'ver-row';
+    row.innerHTML = `<span class="ver-when"></span>
+      <span class="ver-meta">${info.documents} docs · ${info.nodes} nodes · ${bytesText(info.bytes)}</span>
+      <button class="chip" data-save>Save</button>
+      <button class="chip" data-put>Restore</button>`;
+    row.querySelector('.ver-when').textContent = agoText(info.when);
+    row.querySelector('[data-save]').addEventListener('click', () => {
+      download('mindnote-backup-' + new Date(info.when).toISOString().slice(0, 10) + '.json', raw || '');
+    });
+    row.querySelector('[data-put]').addEventListener('click', async () => {
+      const names = info.names.length ? '\n\nDocuments: ' + info.names.join(', ') : '';
+      if (!confirm('Put the backup from ' + agoText(info.when) + ' back?' + names +
+        '\n\nWhat is on this device now will be replaced. You can undo it straight afterwards.')) return;
+      close();
+      await restoreBackup(key);
+    });
+    list.appendChild(row);
   }
 }
 
@@ -2208,8 +2397,7 @@ function wire() {
     const onScheme = () => { if (UI.theme === 'system') render(); };
     mq.addEventListener ? mq.addEventListener('change', onScheme) : mq.addListener(onScheme);
   }
-  $('#exportAll').addEventListener('click', exportAll);
-  $('#importBtn').addEventListener('click', () => $('#importFile').click());
+  $('#dataBtn').addEventListener('click', openDataPanel);
   $('#importFile').addEventListener('change', e => {
     const f = e.target.files[0]; if (!f) return;
     const r = new FileReader();
@@ -2300,7 +2488,7 @@ window.MNApp = {
   },
 
   isBusy: () => !!editing,
-  isReady: () => booted,
+  isReady: () => booted && !schemaBlocked,
   toast: msg => toast(msg)
 };
 
@@ -2312,7 +2500,19 @@ let booted = false;
    frame would make the app feel slow to open. */
 function boot() {
   const raw = localRaw();
-  if (!hydrate(raw)) seed();
+  if (!hydrate(raw)) {
+    if (schemaBlocked) {
+      document.body.innerHTML =
+        '<div style="font-family:Manrope,system-ui,sans-serif;max-width:34rem;margin:18vh auto;padding:0 24px;line-height:1.6">' +
+        '<h1 style="font-size:20px;margin:0 0 12px">This device holds newer MindNote data</h1>' +
+        '<p style="color:#555">The saved workspace was written by a later version of MindNote than the one loaded here, ' +
+        'so it has been left untouched rather than read incorrectly.</p>' +
+        '<p style="color:#555">Reload the page to pick up the current version. If that does not help, the copy on this ' +
+        'device is safe and can be exported once the newer version loads.</p></div>';
+      return;
+    }
+    seed();
+  }
   booted = true;
 
   if (window.innerWidth <= 900) UI.sidebar = false;
@@ -2327,6 +2527,7 @@ function boot() {
 }
 
 async function reconcile(raw) {
+  if (schemaBlocked) return;
   let fromIdb = null;
   try { fromIdb = await idbGet(); } catch (e) { fromIdb = null; }
 
@@ -2348,6 +2549,9 @@ async function reconcile(raw) {
   }
 
   document.dispatchEvent(new Event('mindnote:ready'));
+
+  maybeBackup();
+  setInterval(maybeBackup, 60 * 60 * 1000);
 }
 
 boot();

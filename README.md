@@ -203,6 +203,22 @@ away.
 On touch screens: tap to select, tap twice to edit, drag to move, and use the action bar
 at the bottom.
 
+## Data and backup
+
+**Data & backup** at the bottom of the documents panel is the one place for all of this.
+It shows how large your workspace is and how many images it carries, saves a dated
+backup file, opens one back up, and lists the automatic backups this device has taken.
+
+The app takes a local backup about once a day and keeps the last ten, in the same
+database as your working copy. Any of them can be restored — the app asks first, and
+Ctrl+Z undoes a restore — or saved out as a file. These live in this browser, so they
+cover a mistake but not a lost phone. Save a file occasionally as well.
+
+Everything written carries `schemaVersion`, so future versions of MindNote can migrate
+old data instead of guessing at it. If a device ever finds data written by a *newer*
+version than the one running, it refuses to read it and says so, rather than reading it
+wrongly and saving the damage back.
+
 ## Earlier versions
 
 The server keeps the last ten versions of your workspace, roughly one for every ten
@@ -212,8 +228,12 @@ size. Restoring puts that version back on every device, and archives what was th
 first, so a restore can itself be undone.
 
 This is the safety net for the worst case: a document deleted by mistake, or a bad edit
-that synced everywhere before you noticed. Very large workspaces, over 1 MB, are not
+that synced everywhere before you noticed. Very large workspaces, over 2 MB, are not
 archived, so that ten copies cannot fill a small free database.
+
+**The stored workspace never expires.** It stays until you change it, however long you
+leave the app unopened. The version trail is dropped after two years; the workspace
+itself is not.
 
 ## Where your work lives
 
