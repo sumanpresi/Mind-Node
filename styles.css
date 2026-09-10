@@ -301,7 +301,23 @@ button{cursor:pointer;background:none;border:0}
 .n-emoji{font-size:16px;line-height:1}
 .n-img{width:auto;max-width:150px;border-radius:7px;display:block;margin:2px 0}
 .n-meta{display:flex;gap:4px;align-items:center;color:var(--muted);font-size:11px}
-.n-note-ic{cursor:pointer}
+.n-url-ic{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:36px;
+  height:36px;
+  font-size:20px;
+  cursor:pointer;
+  touch-action:manipulation;
+  border-radius:8px;
+}@media (max-width:600px){
+  .n-url-ic{
+    width:44px;
+    height:44px;
+    font-size:22px;
+  }
+}.n-note-ic{cursor:pointer}
 .n-tags{display:flex;gap:3px}
 .n-tag{height:5px;width:16px;border-radius:3px;flex:0 0 16px}
 .n-fold{
