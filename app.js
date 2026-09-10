@@ -38,6 +38,65 @@ const store = (() => {
 })();
 const KEY = 'mindnote.v1';
 
+/* IndexedDB holds the working copy. It has a far larger quota than
+   localStorage and survives better, and a browser that cannot open it
+   simply falls back to the older store. localStorage is kept as a mirror
+   while it fits, so an older build of the app still finds the data. */
+const DB_NAME = 'mindnote', DB_STORE = 'state', DB_KEY = 'workspace';
+let idbHandle = null, idbBroken = false;
+
+function idbOpen() {
+  if (idbBroken || typeof indexedDB === 'undefined') return Promise.reject(new Error('no indexeddb'));
+  if (idbHandle) return Promise.resolve(idbHandle);
+  return new Promise((res, rej) => {
+    let req;
+    try { req = indexedDB.open(DB_NAME, 1); } catch (e) { idbBroken = true; return rej(e); }
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+    };
+    req.onsuccess = () => { idbHandle = req.result; res(idbHandle); };
+    req.onerror = () => { idbBroken = true; rej(req.error); };
+    req.onblocked = () => { idbBroken = true; rej(new Error('blocked')); };
+  });
+}
+function idbGet() {
+  return idbOpen().then(db => new Promise((res, rej) => {
+    const tx = db.transaction(DB_STORE, 'readonly');
+    const r = tx.objectStore(DB_STORE).get(DB_KEY);
+    r.onsuccess = () => res(r.result || null);
+    r.onerror = () => rej(r.error);
+  }));
+}
+function idbSet(value) {
+  return idbOpen().then(db => new Promise((res, rej) => {
+    const tx = db.transaction(DB_STORE, 'readwrite');
+    tx.objectStore(DB_STORE).put(value, DB_KEY);
+    tx.oncomplete = () => res(true);
+    tx.onerror = () => rej(tx.error);
+    tx.onabort = () => rej(tx.error || new Error('aborted'));
+  }));
+}
+
+function localRaw() {
+  try { return store.getItem(KEY); } catch (e) { return null; }
+}
+function savedAtOf(raw) {
+  try { return JSON.parse(raw).savedAt || 0; } catch (e) { return 0; }
+}
+
+let storageWarned = false;
+function storeSave(json) {
+  let mirrored = false;
+  try { store.setItem(KEY, json); mirrored = true; } catch (e) { /* too big for the old store */ }
+  idbSet(json).catch(() => {
+    if (!mirrored && !storageWarned) {
+      storageWarned = true;
+      toast('This device will not save any more — export your work to a file.');
+    }
+  });
+}
+
 /* ------------------------------- state ----------------------------- */
 let S = { docs: {}, order: [], active: null };
 let UI = {
@@ -187,26 +246,18 @@ function save() {
     }
   }
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try {
-      store.setItem(KEY, JSON.stringify({
-        docs: S.docs, order: S.order, active: S.active, ui: UI, deleted: deletedDocs
-      }));
-    } catch (e) { toast('Storage is full — export your work to a file.'); }
-  }, 250);
+  saveTimer = setTimeout(persistNow, 250);
   if (changed && window.MNSync) window.MNSync.touch();
 }
 function persistNow() {
   clearTimeout(saveTimer);
-  try {
-    store.setItem(KEY, JSON.stringify({
-      docs: S.docs, order: S.order, active: S.active, ui: UI, deleted: deletedDocs
-    }));
-  } catch (e) { toast('Storage is full — export your work to a file.'); }
+  storeSave(JSON.stringify({
+    docs: S.docs, order: S.order, active: S.active, ui: UI, deleted: deletedDocs,
+    savedAt: Date.now()
+  }));
 }
-function load() {
+function hydrate(raw) {
   try {
-    const raw = store.getItem(KEY);
     if (!raw) return false;
     const data = JSON.parse(raw);
     if (!data.docs || !data.order || !data.order.length) return false;
@@ -2204,6 +2255,7 @@ function wire() {
 window.MNApp = {
   /* everything worth sending, minus each device's own camera position */
   snapshot(exclude) {
+    if (!booted) return { docs: {}, order: [], deleted: {} };
     const skip = new Set(exclude || []);
     const docs = {};
     for (const [id, d] of Object.entries(S.docs)) {
@@ -2220,6 +2272,7 @@ window.MNApp = {
 
   /* take the server's version of the workspace; returns false if it was skipped */
   merge(state) {
+    if (!booted) return false;          // never overwrite a workspace that has not loaded
     if (editing) return false;
     const ae = document.activeElement;
     if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return false;
@@ -2247,14 +2300,54 @@ window.MNApp = {
   },
 
   isBusy: () => !!editing,
+  isReady: () => booted,
   toast: msg => toast(msg)
 };
 
 /* ------------------------------- start ----------------------------- */
-if (!load()) { seed(); save(); }
-if (window.innerWidth <= 900) UI.sidebar = false;
-UI.selected = null;
-pendingFit = !doc().cam;
-wire();
-render();
-if (pendingFit) { pendingFit = false; fitView(); }
+let booted = false;
+
+/* Paint from whatever is on hand immediately, then reconcile with
+   IndexedDB a moment later. Waiting on the database before the first
+   frame would make the app feel slow to open. */
+function boot() {
+  const raw = localRaw();
+  if (!hydrate(raw)) seed();
+  booted = true;
+
+  if (window.innerWidth <= 900) UI.sidebar = false;
+  UI.selected = null;
+  pendingFit = !doc().cam;
+
+  wire();
+  render();
+  if (pendingFit) { pendingFit = false; fitView(); }
+
+  reconcile(raw);
+}
+
+async function reconcile(raw) {
+  let fromIdb = null;
+  try { fromIdb = await idbGet(); } catch (e) { fromIdb = null; }
+
+  /* The larger store wins when it holds something newer — which happens
+     when the workspace outgrew localStorage, or that copy was cleared. */
+  if (fromIdb && fromIdb !== raw && savedAtOf(fromIdb) > savedAtOf(raw)) {
+    if (hydrate(fromIdb) && !editing) {
+      UI.selected = null;
+      render();
+    }
+  }
+  persistNow();                        // carries an old copy across into IndexedDB
+
+  if (navigator.storage && navigator.storage.persist) {
+    try {
+      const already = await navigator.storage.persisted();
+      if (!already) await navigator.storage.persist();
+    } catch (e) { /* the browser may simply not offer this */ }
+  }
+
+  document.dispatchEvent(new Event('mindnote:ready'));
+}
+
+boot();

@@ -203,10 +203,29 @@ away.
 On touch screens: tap to select, tap twice to edit, drag to move, and use the action bar
 at the bottom.
 
+## Earlier versions
+
+The server keeps the last ten versions of your workspace, roughly one for every ten
+minutes in which you edit something. Open the sync panel and press **Show earlier
+versions** to see them, with the time, how many documents and nodes each held, and its
+size. Restoring puts that version back on every device, and archives what was there
+first, so a restore can itself be undone.
+
+This is the safety net for the worst case: a document deleted by mistake, or a bad edit
+that synced everywhere before you noticed. Very large workspaces, over 1 MB, are not
+archived, so that ten copies cannot fill a small free database.
+
 ## Where your work lives
 
-Every device keeps a full copy of your documents in its own browser storage, which is
-what makes the app usable offline. With sync on, that copy is reconciled with the shared
+Every device keeps a full copy of your documents in **IndexedDB**, the browser's larger
+and more durable store, with a copy in the older localStorage as well while it still
+fits. If one of them is cleared or runs out of room, the other carries the data. The app
+also asks the browser to mark this data as worth keeping, which helps on phones. That
+request is more likely to be granted once you have installed the app to the home screen,
+which is worth doing on the iPhone in particular: Safari clears ordinary website data
+after about a week of not visiting.
+
+Holding a full copy locally is also what makes the app usable offline. With sync on, that copy is reconciled with the shared
 one on Vercel every few seconds and whenever you return to the tab.
 
 The sync panel shows how much space the workspace takes. Only the current version is

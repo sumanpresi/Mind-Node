@@ -53,6 +53,7 @@
 
   async function push(dropSamples) {
     if (!cfg.code || busy || !window.MNApp) return;
+    if (!window.MNApp.isReady()) return;
     const exclude = dropSamples ? window.MNApp.sampleIds() : [];
     const body = JSON.stringify({ code: cfg.code, state: window.MNApp.snapshot(exclude) });
     if (body === lastPushed && !dirty) { setStatus('ok'); return; }
@@ -159,6 +160,66 @@
     }
   }
 
+  /* ---------------------------- versions ---------------------------- */
+  function whenText(ms) {
+    if (!ms) return 'unknown time';
+    const mins = Math.round((Date.now() - ms) / 60000);
+    if (mins < 1) return 'a moment ago';
+    if (mins < 60) return mins + ' min ago';
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return hrs + (hrs === 1 ? ' hour ago' : ' hours ago');
+    const days = Math.round(hrs / 24);
+    return days + (days === 1 ? ' day ago' : ' days ago');
+  }
+
+  async function showVersions(host) {
+    host.innerHTML = '<p class="modal-note">Loading earlier versions…</p>';
+    let j;
+    try {
+      j = await callApi('/api/sync?history=1&code=' + encodeURIComponent(cfg.code), { cache: 'no-store' });
+    } catch (e) {
+      host.innerHTML = '<p class="modal-note">Could not reach the server.</p>';
+      return;
+    }
+    if (!j.ok) { host.innerHTML = '<p class="modal-note">' + (j.message || 'Not available.') + '</p>'; return; }
+    const list = j.versions || [];
+    if (!list.length) {
+      host.innerHTML = '<p class="modal-note">No earlier versions stored yet. One is kept roughly every ten minutes that you edit.</p>';
+      return;
+    }
+    host.innerHTML = '';
+    list.forEach(v => {
+      const row = document.createElement('div');
+      row.className = 'ver-row';
+      const kb = (v.bytes / 1024).toFixed(0);
+      row.innerHTML = `<span class="ver-when"></span>
+        <span class="ver-meta">${v.documents} docs · ${v.nodes} nodes · ${kb} KB</span>
+        <button class="chip">Restore</button>`;
+      row.querySelector('.ver-when').textContent = whenText(v.savedAt);
+      row.querySelector('button').addEventListener('click', async () => {
+        const names = v.names && v.names.length ? '\n\nDocuments: ' + v.names.join(', ') : '';
+        if (!confirm('Put the version from ' + whenText(v.savedAt) + ' back on every device?' + names +
+          '\n\nWhat is there now is archived first, so this can be undone.')) return;
+        row.querySelector('button').textContent = 'Restoring…';
+        try {
+          const r = await callApi('/api/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: cfg.code, restore: v.index })
+          });
+          if (!r.ok) { alert(r.message || 'Restore failed.'); return; }
+          lastPushed = ''; dirty = false;
+          window.MNApp.merge(r.state);
+          lastSyncAt = Date.now();
+          setStatus('ok');
+          window.MNApp.toast('Version restored');
+          showVersions(host);
+        } catch (e) { alert('Restore failed — no connection.'); }
+      });
+      host.appendChild(row);
+    });
+  }
+
   /* ------------------------------- panel ---------------------------- */
   function openPanel() {
     const host = document.getElementById('modal');
@@ -191,6 +252,13 @@
         server copy alone.</p>
         <p class="modal-note" id="syncState"></p>
         <p class="modal-note" id="syncSize"></p>
+        <div class="ver-block" id="verBlock" hidden>
+          <div class="modal-label" style="margin-top:14px">Earlier versions</div>
+          <p class="modal-note" style="margin-top:0">The server keeps the last ten, about one for every
+          ten minutes of editing. Restoring puts that version on every device.</p>
+          <button class="chip" id="verLoad">Show earlier versions</button>
+          <div id="verList"></div>
+        </div>
       </div>`;
     host.appendChild(card);
 
@@ -199,6 +267,15 @@
     card.querySelector('[data-connect]').textContent = cfg.code ? 'Update and sync now' : 'Turn on sync';
     if (cfg.code) card.querySelector('[data-off]').hidden = false;
     paint();
+
+    const verBlock = card.querySelector('#verBlock');
+    if (cfg.code) {
+      verBlock.hidden = false;
+      card.querySelector('#verLoad').addEventListener('click', e => {
+        e.target.hidden = true;
+        showVersions(card.querySelector('#verList'));
+      });
+    }
 
     const close = () => { host.hidden = true; host.innerHTML = ''; };
     host.addEventListener('click', e => { if (e.target === host) close(); });
@@ -231,6 +308,12 @@
 
   /* ------------------------------- wiring --------------------------- */
   function init() {
+    /* The workspace now loads asynchronously. Pushing before it is ready
+       would send an empty workspace to the server. */
+    if (!window.MNApp || !window.MNApp.isReady || !window.MNApp.isReady()) {
+      document.addEventListener('mindnote:ready', init, { once: true });
+      return;
+    }
     const strip = document.getElementById('syncBtn');
     if (strip) strip.addEventListener('click', openPanel);
     paint();

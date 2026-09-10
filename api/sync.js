@@ -20,6 +20,9 @@ const REDIS_TOKEN =
 
 const MAX_BYTES = 3 * 1024 * 1024;          // refuse anything bigger
 const TTL_SECONDS = 60 * 60 * 24 * 365;      // a year after the last write
+const HISTORY_KEEP = 10;                     // versions kept for recovery
+const HISTORY_EVERY = 10 * 60 * 1000;        // at most one version per 10 minutes
+const HISTORY_MAX_BYTES = 1024 * 1024;       // do not archive very large workspaces
 
 async function redis(command) {
   const r = await fetch(REDIS_URL, {
@@ -39,6 +42,7 @@ function cleanCode(code) {
   return /^[a-z0-9][a-z0-9-]{5,63}$/.test(c) ? c : null;
 }
 const keyFor = code => 'mindnote:' + code;
+const histKeyFor = code => 'mindnote:' + code + ':history';
 
 const empty = () => ({ docs: {}, order: [], deleted: {}, rev: 0 });
 
@@ -65,6 +69,32 @@ function merge(base, incoming) {
   return { docs, order, deleted, rev: (base.rev || 0) + 1 };
 }
 
+/* Keep a short trail of earlier versions so a mistaken edit or deletion
+   can be undone from any device, even days later. */
+async function archive(code, state) {
+  const body = JSON.stringify(state);
+  if (body.length > HISTORY_MAX_BYTES) return;
+  await redis(['LPUSH', histKeyFor(code), body]);
+  await redis(['LTRIM', histKeyFor(code), '0', String(HISTORY_KEEP - 1)]);
+  await redis(['EXPIRE', histKeyFor(code), String(TTL_SECONDS)]);
+}
+function describe(raw, index) {
+  try {
+    const st = JSON.parse(raw);
+    const docs = Object.values(st.docs || {});
+    return {
+      index,
+      savedAt: docs.reduce((a, d) => Math.max(a, d.updated || 0), 0),
+      documents: docs.length,
+      nodes: docs.reduce((a, d) => a + Object.keys(d.nodes || {}).length, 0),
+      bytes: raw.length,
+      names: docs.map(d => d.name).slice(0, 4)
+    };
+  } catch (e) {
+    return { index, savedAt: 0, documents: 0, nodes: 0, bytes: raw ? raw.length : 0, names: [] };
+  }
+}
+
 async function readState(code) {
   const raw = await redis(['GET', keyFor(code)]);
   if (!raw) return empty();
@@ -89,6 +119,12 @@ module.exports = async (req, res) => {
     if (req.method === 'GET') {
       const code = cleanCode(req.query && req.query.code);
       if (!code) { res.status(400).json({ ok: false, message: 'That workspace code is not valid.' }); return; }
+
+      if (req.query && req.query.history) {
+        const rows = await redis(['LRANGE', histKeyFor(code), '0', String(HISTORY_KEEP - 1)]) || [];
+        res.status(200).json({ ok: true, versions: rows.map(describe) });
+        return;
+      }
       const state = await readState(code);
       res.status(200).json({ ok: true, state });
       return;
@@ -98,6 +134,27 @@ module.exports = async (req, res) => {
       const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
       const code = cleanCode(body.code);
       if (!code) { res.status(400).json({ ok: false, message: 'That workspace code is not valid.' }); return; }
+      /* Put an earlier version back. The version being replaced is archived
+         first, so a restore can itself be undone. */
+      if (body.restore != null) {
+        const index = parseInt(body.restore, 10);
+        if (!(index >= 0 && index < HISTORY_KEEP)) {
+          res.status(400).json({ ok: false, message: 'That is not one of the stored versions.' });
+          return;
+        }
+        const raw = await redis(['LINDEX', histKeyFor(code), String(index)]);
+        if (!raw) { res.status(404).json({ ok: false, message: 'That version is no longer stored.' }); return; }
+        let wanted;
+        try { wanted = JSON.parse(raw); } catch (e) { res.status(500).json({ ok: false, message: 'That version could not be read.' }); return; }
+
+        const now = await readState(code);
+        await archive(code, now);
+        const restored = Object.assign({}, wanted, { rev: (now.rev || 0) + 1, historyAt: Date.now() });
+        await redis(['SET', keyFor(code), JSON.stringify(restored), 'EX', String(TTL_SECONDS)]);
+        res.status(200).json({ ok: true, state: restored, restored: true });
+        return;
+      }
+
       const incoming = body.state || empty();
 
       const current = await readState(code);
@@ -108,7 +165,18 @@ module.exports = async (req, res) => {
         res.status(413).json({ ok: false, message: 'This workspace is too large to sync. Remove some images and try again.' });
         return;
       }
-      await redis(['SET', keyFor(code), payload, 'EX', String(TTL_SECONDS)]);
+
+      /* Archive the version being replaced, but at most once every ten
+         minutes, so a burst of edits does not fill the trail. */
+      const lastArchive = current.historyAt || 0;
+      if (Object.keys(current.docs || {}).length && Date.now() - lastArchive > HISTORY_EVERY) {
+        await archive(code, current);
+        merged.historyAt = Date.now();
+      } else {
+        merged.historyAt = lastArchive;
+      }
+
+      await redis(['SET', keyFor(code), JSON.stringify(merged), 'EX', String(TTL_SECONDS)]);
       res.status(200).json({ ok: true, state: merged });
       return;
     }
