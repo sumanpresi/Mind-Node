@@ -78,6 +78,9 @@ function mkDoc(name) {
   };
 }
 const doc = () => S.docs[S.active];
+/* nodes with no parent that are not the central idea: free-standing branches */
+const floatsOf = () => Object.values(doc().nodes).filter(n => !n.parent && n.id !== doc().root);
+const rootsOf = () => [doc().root, ...floatsOf().map(n => n.id)];
 const N = id => doc().nodes[id];
 const kidsOf = n => n.children.filter(id => doc().nodes[id]);
 const visKids = n => (n.collapsed ? [] : kidsOf(n));
@@ -92,7 +95,12 @@ function addChild(parentId, text) {
 }
 function addSibling(id, text) {
   const d = doc(), n = d.nodes[id];
-  if (!n.parent) return addChild(id, text);
+  if (!n.parent) {                       // main nodes sit beside each other
+    const s2 = mkNode(null, text || '');
+    s2.x = (n.x == null ? 0 : n.x); s2.y = (n.y == null ? 0 : n.y) + 90;
+    d.nodes[s2.id] = s2;
+    return s2;
+  }
   const p = d.nodes[n.parent];
   const kid = mkNode(n.parent, text || '');
   d.nodes[kid.id] = kid;
@@ -125,6 +133,11 @@ function colorOf(id) {
   if (top) {
     const i = d.nodes[d.root].children.indexOf(top.id);
     return PALETTE[(i < 0 ? 0 : i) % PALETTE.length];
+  }
+  const head = path[path.length - 1];
+  if (head && head.id !== d.root) {
+    const i = floatsOf().findIndex(f => f.id === head.id);
+    return PALETTE[((i < 0 ? 0 : i) + 3) % PALETTE.length];
   }
   return ROOT_COLOR;
 }
@@ -266,12 +279,47 @@ function pasteBranch(intoId, plain) {
   UI.selected = top.id;
   save(); render();
 }
-function newMainNode() {
+/* A main node stands on its own, beside the central idea rather than under
+   it. Drag it onto any node later to attach it. */
+function newMainNode(worldX, worldY) {
   const d = doc();
   pushUndo();
-  const n = addChild(d.root, '');
+  const n = mkNode(null, '');
+  const at = (worldX == null) ? viewCentre() : { x: worldX, y: worldY };
+  n.x = at.x; n.y = at.y;
+  d.nodes[n.id] = n;
   UI.selected = n.id;
   save(); render(); editNode(n.id);
+}
+function viewCentre() {
+  const c = cam(), el = $('#canvas');
+  return { x: (el.clientWidth / 2 - c.x) / c.s - 60, y: (el.clientHeight / 2 - c.y) / c.s - 20 };
+}
+function toWorld(clientX, clientY) {
+  const c = cam(), r = $('#canvas').getBoundingClientRect();
+  return { x: (clientX - r.left - c.x) / c.s, y: (clientY - r.top - c.y) / c.s };
+}
+function detachNode(id) {
+  const n = N(id);
+  if (!n) return;
+  if (id === doc().root) return toast('The central idea cannot be detached');
+  if (!n.parent) return toast('Already a main node');
+  pushUndo();
+  const p = N(n.parent);
+  p.children = p.children.filter(c => c !== id);
+  n.parent = null;
+  const pos = P[id] || { x: 0, y: 0 };
+  n.x = pos.x; n.y = pos.y;
+  UI.selected = id;
+  save(); render();
+  toast('Detached — drag it onto a node to attach it again');
+}
+function attachToRoot(id) {
+  const d = doc();
+  if (!N(id) || N(id).parent) return;
+  pushUndo();
+  reparent(id, d.root);
+  save(); render();
 }
 function cutBranch(id) {
   if (!N(id) || !N(id).parent) return toast('The central idea stays');
@@ -419,10 +467,8 @@ function renderMap() {
   refreshFocusSet();
 
   const visible = [];
-  (function walk(id) {
-    visible.push(id);
-    visKids(N(id)).forEach(walk);
-  })(d.root);
+  const walk = id => { visible.push(id); visKids(N(id)).forEach(walk); };
+  rootsOf().forEach(walk);
 
   // 1. build elements, holding on to them: re-querying per node is quadratic
   const els = {};
@@ -434,9 +480,22 @@ function renderMap() {
     P[id] = { w: el.offsetWidth, h: el.offsetHeight, x: 0, y: 0 };
   });
 
-  // 3. lay out
-  ({ horizontal: layoutHorizontal, vertical: layoutVertical, compact: layoutCompact,
-     radial: layoutRadial, manual: layoutManual })[d.layout]();
+  // 3. lay out: the central idea first, then each detached branch where it sits
+  if (d.layout === 'manual') {
+    layoutManual();
+  } else {
+    const algo = { horizontal: layoutHorizontal, vertical: layoutVertical,
+                   compact: layoutCompact, radial: layoutRadial }[d.layout];
+    algo(d.root, 0, 0);
+    let spare = 0;
+    floatsOf().forEach(f => {
+      if (f.x == null || f.y == null) {          // never positioned: park it clear of the map
+        const b = bboxOf(visible);
+        f.x = b.x2 + 90; f.y = b.y1 + (spare++ * 90);
+      }
+      algo(f.id, f.x + P[f.id].w / 2, f.y + P[f.id].h / 2);
+    });
+  }
 
   // 4. position
   visible.forEach(id => {
@@ -522,6 +581,16 @@ function sideOf(id) {
   if (!n.parent || !P[n.parent] || !P[id]) return 1;
   return P[id].x >= P[n.parent].x ? 1 : -1;
 }
+function bboxOf(ids) {
+  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+  ids.forEach(id => {
+    const p = P[id]; if (!p) return;
+    x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y);
+    x2 = Math.max(x2, p.x + p.w); y2 = Math.max(y2, p.y + p.h);
+  });
+  if (x1 === Infinity) return { x1: 0, y1: 0, x2: 0, y2: 0 };
+  return { x1, y1, x2, y2 };
+}
 function childSide(id) {
   const kids = visKids(N(id));
   if (!kids.length) return 1;
@@ -532,6 +601,7 @@ function buildNodeEl(id) {
   const d = doc(), n = N(id), c = colorOf(id);
   const el = document.createElement('div');
   el.className = `node sh-${n.shape}` + (id === d.root ? ' is-root' : '') +
+    (!n.parent && id !== d.root ? ' is-float' : '') +
     (id === UI.selected ? ' is-sel' : '');
   el.dataset.id = id;
   el.style.setProperty('--nc', c);
@@ -614,21 +684,21 @@ function leaves(id) {
 }
 function resetMemo() { memoH = {}; memoW = {}; memoL = {}; }
 
-function layoutHorizontal() {
+function layoutHorizontal(rootId, cx, cy) {
   resetMemo();
-  const d = doc(), root = d.nodes[d.root], rp = P[d.root];
-  rp.x = -rp.w / 2; rp.y = -rp.h / 2;
+  const root = N(rootId), rp = P[rootId];
+  rp.x = cx - rp.w / 2; rp.y = cy - rp.h / 2;
   const kids = visKids(root);
   const half = Math.ceil(kids.length / 2);
   const right = kids.slice(0, half), left = kids.slice(half);
-  stackH(right, rp.x + rp.w + GAP_X, 1);
-  stackH(left, rp.x - GAP_X, -1);
+  stackH(right, rp.x + rp.w + GAP_X, 1, cy);
+  stackH(left, rp.x - GAP_X, -1, cy);
 }
-function stackH(list, x, dir) {
+function stackH(list, x, dir, centre) {
   if (!list.length) return;
   const total = list.reduce((a, k, i) => a + subH(k) + (i ? GAP_Y : 0), 0);
-  let cy = -total / 2;
-  list.forEach(k => { const h = subH(k); placeH(k, x, cy + h / 2, dir); cy += h + GAP_Y; });
+  let y = centre - total / 2;
+  list.forEach(k => { const h = subH(k); placeH(k, x, y + h / 2, dir); y += h + GAP_Y; });
 }
 function placeH(id, x, cy, dir) {
   const p = P[id];
@@ -642,11 +712,10 @@ function placeH(id, x, cy, dir) {
   kids.forEach(k => { const h = subH(k); placeH(k, nx, y + h / 2, dir); y += h + GAP_Y; });
 }
 
-function layoutVertical() {
+function layoutVertical(rootId, cx, cy) {
   resetMemo();
-  const d = doc(), rp = P[d.root];
-  rp.x = -rp.w / 2; rp.y = -rp.h / 2;
-  placeV(d.root, 0, rp.y);
+  const rp = P[rootId];
+  placeV(rootId, cx, cy - rp.h / 2);
 }
 function placeV(id, cx, top) {
   const p = P[id];
@@ -662,11 +731,10 @@ function placeV(id, cx, top) {
   });
 }
 
-function layoutCompact() {
+function layoutCompact(rootId, cx, cy) {
   resetMemo();
-  const d = doc(), rp = P[d.root];
-  rp.x = -rp.w / 2; rp.y = -rp.h / 2;
-  placeC(d.root, rp.x, rp.y);
+  const rp = P[rootId];
+  placeC(rootId, cx - rp.w / 2, cy - rp.h / 2);
 }
 function placeC(id, x, top) {
   const p = P[id];
@@ -678,37 +746,37 @@ function placeC(id, x, top) {
   kids.forEach(k => { placeC(k, nx, y); y += subH(k) + 10; });
 }
 
-function layoutRadial() {
+function layoutRadial(rootId, cx, cy) {
   resetMemo();
-  const d = doc(), root = d.nodes[d.root], rp = P[d.root];
-  rp.x = -rp.w / 2; rp.y = -rp.h / 2;
+  const root = N(rootId), rp = P[rootId];
+  rp.x = cx - rp.w / 2; rp.y = cy - rp.h / 2;
   const kids = visKids(root);
   const tot = kids.reduce((a, k) => a + leaves(k), 0) || 1;
   let a0 = -Math.PI / 2;
   kids.forEach(k => {
     const span = (leaves(k) / tot) * Math.PI * 2;
-    placeR(k, 1, a0, a0 + span);
+    placeR(k, 1, a0, a0 + span, cx, cy);
     a0 += span;
   });
 }
-function placeR(id, depth, a0, a1) {
+function placeR(id, depth, a0, a1, cx, cy) {
   const mid = (a0 + a1) / 2, r = depth * RSTEP, p = P[id];
-  p.x = Math.cos(mid) * r - p.w / 2;
-  p.y = Math.sin(mid) * r - p.h / 2;
+  p.x = cx + Math.cos(mid) * r - p.w / 2;
+  p.y = cy + Math.sin(mid) * r - p.h / 2;
   const kids = visKids(N(id));
   if (!kids.length) return;
   const tot = kids.reduce((a, k) => a + leaves(k), 0) || 1;
   let s = a0;
   kids.forEach(k => {
     const span = (a1 - a0) * leaves(k) / tot;
-    placeR(k, depth + 1, s, s + span);
+    placeR(k, depth + 1, s, s + span, cx, cy);
     s += span;
   });
 }
 
 function layoutManual() {
   const d = doc();
-  (function walk(id) {
+  const walk = id => {
     const n = d.nodes[id], p = P[id];
     if (n.x == null || n.y == null) {
       if (n.parent && P[n.parent]) {
@@ -720,7 +788,8 @@ function layoutManual() {
     }
     p.x = n.x; p.y = n.y;
     visKids(n).forEach(walk);
-  })(d.root);
+  };
+  rootsOf().forEach(walk);
 }
 function pinAll() {
   const d = doc();
@@ -968,11 +1037,23 @@ function canvasSetup() {
         pushUndo(); reparent(nd.id, nd.target); save(); render();
       } else {
         pushUndo();
-        const d = doc();
-        if (d.layout !== 'manual') { pinAll(); d.layout = 'manual'; }
+        const d = doc(), node = d.nodes[nd.id];
         const s = cam().s;
         const dx = (e.clientX - nd.sx) / s, dy = (e.clientY - nd.sy) / s;
-        nd.ids.forEach(id => { d.nodes[id].x += dx; d.nodes[id].y += dy; });
+
+        if (d.layout === 'manual') {
+          nd.ids.forEach(id => { d.nodes[id].x += dx; d.nodes[id].y += dy; });
+        } else if (node && node.parent) {
+          /* pulled clear of everything: it becomes a main node of its own */
+          const p = N(node.parent);
+          p.children = p.children.filter(c => c !== nd.id);
+          node.parent = null;
+          node.x = P[nd.id].x + dx; node.y = P[nd.id].y + dy;
+          toast('Detached — drop it on a node to attach it again');
+        } else if (node) {
+          node.x = (node.x || P[nd.id].x) + dx;
+          node.y = (node.y || P[nd.id].y) + dy;
+        }
         save(); render();
       }
       return;
@@ -1070,11 +1151,16 @@ function hitNode(clientX, clientY, exclude) {
   return null;
 }
 function reparent(id, newParent) {
-  if (id === doc().root) return;
+  const d = doc();
+  if (id === d.root) return;
   if (newParent === id || descendants(id).includes(newParent)) return;
-  const n = N(id), old = N(n.parent);
-  old.children = old.children.filter(c => c !== id);
+  const n = N(id);
+  if (n.parent) {
+    const old = N(n.parent);
+    if (old) old.children = old.children.filter(c => c !== id);
+  }
   n.parent = newParent;
+  if (d.layout !== 'manual') { n.x = null; n.y = null; }   // let the layout take over again
   N(newParent).children.push(id);
   N(newParent).collapsed = false;
 }
@@ -1146,6 +1232,8 @@ function openContextMenu(x, y, id) {
     item(st === 'done' ? 'Clear task' : 'Add task', () => { pushUndo(); setDone(id, st !== 'done'); UI.showTasks = true; save(); render(); }, { skip: isRoot });
     item('Create connection', () => doAct('connect'));
     item('Sort children A–Z', () => sortChildren(id), { skip: n.children.length < 2 });
+    item('Detach from parent', () => detachNode(id), { skip: isRoot || !n.parent });
+    item('Attach to central idea', () => attachToRoot(id), { skip: isRoot || !!n.parent });
     sep();
     item('Cut', () => cutBranch(id), { skip: isRoot });
     item('Copy', () => copyBranch(id), { hint: 'Ctrl C' });
@@ -1160,7 +1248,8 @@ function openContextMenu(x, y, id) {
     });
     item('Delete', () => deleteSelected(), { danger: true, skip: isRoot, hint: 'Del' });
   } else {
-    item('New main node', () => newMainNode());
+    const at = toWorld(x, y);
+    item('New main node', () => newMainNode(at.x, at.y));
     item('Paste', () => pasteBranch(d.root, true), { disabled: !clipboard });
     item('Paste and keep style', () => pasteBranch(d.root, false), { disabled: !clipboard });
     sep();
@@ -1356,6 +1445,14 @@ function renderOutline() {
   const wrap = document.createElement('div');
   wrap.className = 'ol-wrap';
   wrap.appendChild(olNode(d.root, 0));
+  const floats = floatsOf();
+  if (floats.length) {
+    const lbl = document.createElement('div');
+    lbl.className = 'ol-section';
+    lbl.textContent = floats.length === 1 ? 'Detached branch' : 'Detached branches';
+    wrap.appendChild(lbl);
+    floats.forEach(f => wrap.appendChild(olNode(f.id, 0)));
+  }
   host.appendChild(wrap);
 }
 function olNode(id, lvl) {
@@ -1509,7 +1606,9 @@ function panelActions(id, w) {
     chipBtn(st === 'done' ? 'Done' : 'Add task', () => { pushUndo(); setDone(id, st !== 'done'); UI.showTasks = true; save(); render(); }, st === 'done'),
     chipBtn(n.collapsed ? 'Unfold' : 'Fold', () => { N(id).collapsed = !N(id).collapsed; save(); render(); }),
     chipBtn('Create connection', () => doAct('connect'), !!connectFrom),
-    chipBtn('Sort children A–Z', () => sortChildren(id))
+    chipBtn('Sort children A–Z', () => sortChildren(id)),
+    n.parent && !isRoot ? chipBtn('Detach', () => detachNode(id)) : null,
+    !n.parent && !isRoot ? chipBtn('Attach to centre', () => attachToRoot(id)) : null
   ])));
 
   w.appendChild(group('Clipboard', rowOf([
@@ -1733,7 +1832,7 @@ function group(title, child) {
 function rowOf(children) {
   const r = document.createElement('div');
   r.className = 'row';
-  children.forEach(c => r.appendChild(c));
+  children.filter(Boolean).forEach(c => r.appendChild(c));
   return r;
 }
 function chipBtn(label, fn, on, danger) {

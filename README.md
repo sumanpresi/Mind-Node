@@ -103,6 +103,14 @@ bottom sit undo, cut, copy, duplicate, delete and redo. Everything you can do to
 is reachable without leaving the map. On a wide screen the same panels appear as tabs in
 the right-hand inspector instead.
 
+**Main nodes and detaching** — a document can hold more than one tree. "New main node"
+in the canvas menu drops a free-standing node where you clicked, drawn with a dashed
+border to show it stands on its own. Any branch can be pulled out of the tree: drag it
+onto empty canvas, or choose Detach. To put a branch somewhere else, drag it onto the
+node you want it under — with a mouse, or by dragging with your finger — and the target
+lights up before you let go. Detached branches also appear in the outline, under their
+own heading.
+
 **Context menu** — right click anywhere on a PC, or press and hold on a phone or the
 Fold. On empty canvas you get: new main node, paste, paste and keep style, zoom in, zoom
 out, zoom to fit, unfold everything. On a node you get the full list of node actions.
