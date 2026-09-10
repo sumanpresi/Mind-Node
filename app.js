@@ -146,6 +146,7 @@ function mkNode(parent, text) {
     id: uid(), parent, text: text || '', children: [], collapsed: false,
     shape: 'rounded', color: null, border: 2, lineStyle: 'solid',
     note: '', tags: [], done: false, emoji: '', image: '', link: null,
+    checklist: false,
     x: null, y: null
   };
 }
@@ -164,6 +165,12 @@ const rootsOf = () => [doc().root, ...floatsOf().map(n => n.id)];
 const N = id => doc().nodes[id];
 const kidsOf = n => n.children.filter(id => doc().nodes[id]);
 const visKids = n => (n.collapsed ? [] : kidsOf(n));
+/* Checklist children are drawn inside their parent's own node box (see
+   buildChecklistBody), not as separate positioned map nodes. Every layout
+   routine and edge-drawing routine must stop at a checklist parent — using
+   visKids() there instead would try to size/position nodes that never get
+   measured, since buildNodeEl() never creates a .node element for them. */
+const layoutKids = n => (n.checklist ? [] : visKids(n));
 
 function addChild(parentId, text) {
   const d = doc(), p = d.nodes[parentId];
@@ -239,6 +246,15 @@ function setDone(id, val) {
   taskMemo = {};
   N(id).done = val;
   descendants(id).forEach(c => { N(c).done = val; });
+}
+/* A checklist row is a single item, not a branch: toggling "Helmet" must
+   never cascade to Helmet's own descendants the way setDone() does for the
+   general fold-a-branch-into-one-task case. computeTaskState() already
+   walks kidsOf() bottom-up, so the parent's ✓/part/○ state updates for
+   free once this flips. */
+function toggleChecklistItem(id) {
+  taskMemo = {};
+  N(id).done = !N(id).done;
 }
 
 /* =====================================================================
@@ -602,7 +618,7 @@ function renderMap() {
   refreshFocusSet();
 
   const visible = [];
-  const walk = id => { visible.push(id); visKids(N(id)).forEach(walk); };
+  const walk = id => { visible.push(id); layoutKids(N(id)).forEach(walk); };
   rootsOf().forEach(walk);
 
   // 1. build elements, holding on to them: re-querying per node is quadratic
@@ -727,7 +743,7 @@ function bboxOf(ids) {
   return { x1, y1, x2, y2 };
 }
 function childSide(id) {
-  const kids = visKids(N(id));
+  const kids = layoutKids(N(id));
   if (!kids.length) return 1;
   return (P[kids[0]].x >= P[id].x) ? 1 : -1;
 }
@@ -742,22 +758,30 @@ function buildNodeEl(id) {
   el.style.setProperty('--nc', c);
   if (n.shape !== 'line' && n.shape !== 'embedded') el.style.borderWidth = n.border + 'px';
 
+  /* Everything that used to be appended straight to the node box now goes
+     in .node-head instead, so a checklist body (see below) can stack under
+     it. .node-head carries the exact flex-row rules .node used to have —
+     see .node.has-checklist / .node-head in styles.css — so a node with no
+     checklist looks and measures exactly as before. */
+  const head = document.createElement('div');
+  head.className = 'node-head';
+
   if (UI.showTasks && id !== d.root) {
     const st = taskState(id);
     const t = document.createElement('span');
     t.className = 'n-task ' + (st === 'done' ? 'done' : st === 'part' ? 'part' : '');
     t.dataset.task = id;
     t.textContent = st === 'done' ? '✓' : '';
-    el.appendChild(t);
+    head.appendChild(t);
   }
   if (UI.showImages && n.emoji) {
     const e = document.createElement('span');
-    e.className = 'n-emoji'; e.textContent = n.emoji; el.appendChild(e);
+    e.className = 'n-emoji'; e.textContent = n.emoji; head.appendChild(e);
   }
   const txt = document.createElement('span');
   txt.className = 'txt';
   txt.textContent = n.text;
-  el.appendChild(txt);
+  head.appendChild(txt);
 
   const meta = [];
   if (UI.showNotes && n.note.trim()) meta.push(`<span class="n-note-ic" data-note="${id}">📝</span>`);
@@ -766,12 +790,12 @@ function buildNodeEl(id) {
   if (meta.length) {
     const m = document.createElement('span');
     m.className = 'n-meta'; m.innerHTML = meta.join('');
-    el.appendChild(m);
+    head.appendChild(m);
   }
   if (UI.showImages && n.image) {
     const img = document.createElement('img');
     img.className = 'n-img'; img.src = n.image; img.alt = '';
-    el.appendChild(img);
+    head.appendChild(img);
   }
   if (UI.showTags && n.tags.length) {
     const tw = document.createElement('span');
@@ -781,9 +805,74 @@ function buildNodeEl(id) {
       const s = document.createElement('span');
       s.className = 'n-tag'; s.style.background = tag.color; tw.appendChild(s);
     });
-    el.appendChild(tw);
+    head.appendChild(tw);
+  }
+  el.appendChild(head);
+
+  /* Checklist mode: children render inline, inside this same node box,
+     instead of as separate map nodes. Collapsing still hides them — the
+     branch's real fold flag is untouched, we just skip building the body. */
+  if (n.checklist && !n.collapsed) {
+    el.classList.add('has-checklist');
+    el.appendChild(kidsOf(n).length ? buildChecklistBody(n) : buildChecklistAddOnly(id));
   }
   return el;
+}
+
+/* The checklist list itself: one row per real child (same nodes[], same
+   .done field, same save/sync path as everything else), plus a trailing
+   "+" row that reuses newChild() exactly like the rest of the app does. */
+function buildChecklistBody(n) {
+  const wrap = document.createElement('div');
+  wrap.className = 'checklist';
+  kidsOf(n).forEach(cid => {
+    const c = N(cid);
+    const row = document.createElement('div');
+    row.className = 'check-row';
+
+    const hit = document.createElement('button');
+    hit.type = 'button';
+    hit.className = 'check-hit';
+    hit.dataset.checkbox = cid;
+    hit.setAttribute('aria-label', c.done ? 'Mark as not done' : 'Mark as done');
+    const box = document.createElement('span');
+    box.className = 'check-box' + (c.done ? ' done' : '');
+    hit.appendChild(box);
+    row.appendChild(hit);
+
+    const txt = document.createElement('span');
+    txt.className = 'check-txt' + (c.done ? ' done' : '');
+    txt.textContent = c.text || 'Untitled';
+    txt.dataset.txt = cid;
+    row.appendChild(txt);
+
+    wrap.appendChild(row);
+  });
+  wrap.appendChild(buildChecklistAddRow(n.id));
+  return wrap;
+}
+/* A checklist that has just been switched on and has no items yet: show
+   only the "+" so there is still a way to add the first one. */
+function buildChecklistAddOnly(id) {
+  const wrap = document.createElement('div');
+  wrap.className = 'checklist checklist-empty';
+  wrap.appendChild(buildChecklistAddRow(id));
+  return wrap;
+}
+function buildChecklistAddRow(parentId) {
+  const row = document.createElement('div');
+  row.className = 'check-row check-add-row';
+  const hit = document.createElement('button');
+  hit.type = 'button';
+  hit.className = 'check-add-hit';
+  hit.dataset.checkadd = parentId;
+  hit.setAttribute('aria-label', 'Add checklist item');
+  const dot = document.createElement('span');
+  dot.className = 'check-add';
+  dot.textContent = '+';
+  hit.appendChild(dot);
+  row.appendChild(hit);
+  return row;
 }
 
 /* -------------------------- layout engines ------------------------- */
@@ -792,7 +881,7 @@ let memoH = {}, memoW = {}, memoL = {};
 
 function subH(id) {
   if (memoH[id] != null) return memoH[id];
-  const kids = visKids(N(id));
+  const kids = layoutKids(N(id));
   let v = P[id].h;
   if (kids.length) {
     let sum = 0;
@@ -803,7 +892,7 @@ function subH(id) {
 }
 function subW(id) {
   if (memoW[id] != null) return memoW[id];
-  const kids = visKids(N(id));
+  const kids = layoutKids(N(id));
   let v = P[id].w;
   if (kids.length) {
     let sum = 0;
@@ -814,7 +903,7 @@ function subW(id) {
 }
 function leaves(id) {
   if (memoL[id] != null) return memoL[id];
-  const kids = visKids(N(id));
+  const kids = layoutKids(N(id));
   return (memoL[id] = kids.length ? kids.reduce((a, k) => a + leaves(k), 0) : 1);
 }
 function resetMemo() { memoH = {}; memoW = {}; memoL = {}; }
@@ -823,7 +912,7 @@ function layoutHorizontal(rootId, cx, cy) {
   resetMemo();
   const root = N(rootId), rp = P[rootId];
   rp.x = cx - rp.w / 2; rp.y = cy - rp.h / 2;
-  const kids = visKids(root);
+  const kids = layoutKids(root);
   const half = Math.ceil(kids.length / 2);
   const right = kids.slice(0, half), left = kids.slice(half);
   stackH(right, rp.x + rp.w + GAP_X, 1, cy);
@@ -839,7 +928,7 @@ function placeH(id, x, cy, dir) {
   const p = P[id];
   p.x = dir > 0 ? x : x - p.w;
   p.y = cy - p.h / 2;
-  const kids = visKids(N(id));
+  const kids = layoutKids(N(id));
   if (!kids.length) return;
   const nx = dir > 0 ? p.x + p.w + GAP_X : p.x - GAP_X;
   const total = kids.reduce((a, k, i) => a + subH(k) + (i ? GAP_Y : 0), 0);
@@ -855,7 +944,7 @@ function layoutVertical(rootId, cx, cy) {
 function placeV(id, cx, top) {
   const p = P[id];
   p.x = cx - p.w / 2; p.y = top;
-  const kids = visKids(N(id));
+  const kids = layoutKids(N(id));
   if (!kids.length) return;
   const total = kids.reduce((a, k, i) => a + subW(k) + (i ? GAP_VX : 0), 0);
   let x = cx - total / 2;
@@ -874,7 +963,7 @@ function layoutCompact(rootId, cx, cy) {
 function placeC(id, x, top) {
   const p = P[id];
   p.x = x; p.y = top;
-  const kids = visKids(N(id));
+  const kids = layoutKids(N(id));
   if (!kids.length) return;
   const nx = x + p.w + 34;
   let y = top;
@@ -885,7 +974,7 @@ function layoutRadial(rootId, cx, cy) {
   resetMemo();
   const root = N(rootId), rp = P[rootId];
   rp.x = cx - rp.w / 2; rp.y = cy - rp.h / 2;
-  const kids = visKids(root);
+  const kids = layoutKids(root);
   const tot = kids.reduce((a, k) => a + leaves(k), 0) || 1;
   let a0 = -Math.PI / 2;
   kids.forEach(k => {
@@ -898,7 +987,7 @@ function placeR(id, depth, a0, a1, cx, cy) {
   const mid = (a0 + a1) / 2, r = depth * RSTEP, p = P[id];
   p.x = cx + Math.cos(mid) * r - p.w / 2;
   p.y = cy + Math.sin(mid) * r - p.h / 2;
-  const kids = visKids(N(id));
+  const kids = layoutKids(N(id));
   if (!kids.length) return;
   const tot = kids.reduce((a, k) => a + leaves(k), 0) || 1;
   let s = a0;
@@ -922,7 +1011,7 @@ function layoutManual() {
       } else { n.x = -p.w / 2; n.y = -p.h / 2; }
     }
     p.x = n.x; p.y = n.y;
-    visKids(n).forEach(walk);
+    layoutKids(n).forEach(walk);
   };
   rootsOf().forEach(walk);
 }
@@ -1083,10 +1172,11 @@ function canvasSetup() {
     const linkIc = e.target.closest('[data-link]');
     const urlIc = e.target.closest('[data-url]');
     const addBtn = e.target.closest('[data-add]');
+    const checklistUi = e.target.closest('.checklist');
     /* Controls sitting on top of the canvas must not start a pan. Capturing
        the pointer would send their click to the canvas instead of to them. */
     const overlay = e.target.closest('#zoombar, #ctx, .hint');
-    if (foldBtn || taskBtn || noteIc || linkIc || urlIc || addBtn || overlay) return;
+    if (foldBtn || taskBtn || noteIc || linkIc || urlIc || addBtn || checklistUi || overlay) return;
     /* While a node is being typed into, the canvas stays put. The browser
        still blurs the field, which commits the text. */
     if (editing) return;
@@ -1240,6 +1330,8 @@ function canvasSetup() {
   canvas.addEventListener('pointerleave', () => { hoverId = null; positionHandles(); });
 
   canvas.addEventListener('dblclick', e => {
+    const checkTxt = e.target.closest('[data-txt]');
+    if (checkTxt) { editNode(checkTxt.dataset.txt); return; }
     const el = e.target.closest('.node');
     if (el) editNode(el.dataset.id);
   });
@@ -1275,6 +1367,18 @@ function canvasSetup() {
       UI.selected = id;
       if (add.dataset.add === 'child') newChild(id); else newSibling(id);
       return;
+    }
+    const checkbox = e.target.closest('[data-checkbox]');
+    if (checkbox) {
+      pushUndo();
+      toggleChecklistItem(checkbox.dataset.checkbox);
+      save(); render(); return;
+    }
+    const checkAdd = e.target.closest('[data-checkadd]');
+    if (checkAdd) {
+      const id = checkAdd.dataset.checkadd;
+      if (!id || !N(id)) return;
+      newChild(id); return;
     }
   });
 }
@@ -1369,6 +1473,13 @@ function openContextMenu(x, y, id) {
     item(n.collapsed ? 'Unfold branch' : 'Fold branch', () => { N(id).collapsed = !N(id).collapsed; save(); render(); },
       { skip: !n.children.length, hint: 'Space' });
     item(st === 'done' ? 'Clear task' : 'Add task', () => { pushUndo(); setDone(id, st !== 'done'); UI.showTasks = true; save(); render(); }, { skip: isRoot });
+    item(n.checklist ? 'Turn off checklist view' : 'Show as checklist',
+      () => {
+        pushUndo();
+        n.checklist = !n.checklist;
+        if (n.checklist) UI.showTasks = true;   // so the parent's ✓/part/○ dot is visible right away
+        save(); render();
+      }, { skip: isRoot });
     item('Create connection', () => doAct('connect'));
     item('Sort children A–Z', () => sortChildren(id), { skip: n.children.length < 2 });
     item('Detach from parent', () => detachNode(id), { skip: isRoot || !n.parent });
@@ -1419,7 +1530,7 @@ function readText(el) {
 }
 function editNode(id) {
   if (editing === id) return;
-  const el = $(`#nodes .node[data-id="${id}"] .txt`) || $(`#outline [data-txt="${id}"]`);
+  const el = $(`#nodes .node[data-id="${id}"] .txt`) || $(`#nodes [data-txt="${id}"]`) || $(`#outline [data-txt="${id}"]`);
   if (!el) return;
   editing = id;
   const wrap = el.closest('.node');
