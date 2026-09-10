@@ -8,7 +8,14 @@
 (function () {
   const CFG_KEY = 'mindnote.sync';
   const PUSH_DELAY = 1600;      // quiet period after the last edit
-  const POLL_EVERY = 15000;     // how often to look for other devices
+  /* Checking for other devices costs one command each time, and the free
+     Redis tiers meter commands. Check often while something is happening,
+     then ease off when the workspace has been quiet. */
+  const POLL_STEPS = [
+    [2 * 60 * 1000, 15000],     // active in the last 2 min  -> every 15s
+    [15 * 60 * 1000, 45000],    // in the last 15 min        -> every 45s
+    [Infinity, 150000]          // otherwise                 -> every 2.5 min
+  ];
   const CODE_RE = /^[a-z0-9][a-z0-9-]{5,63}$/;
   const MAX_BYTES = 3 * 1024 * 1024;
 
@@ -19,6 +26,8 @@
   let dirty = false;            // local edits not yet accepted by the server
   let busy = false;
   let lastSyncAt = 0;
+  let lastActivity = Date.now();
+  let lastSize = 0;
   let pushTimer = null, pollTimer = null;
 
   try { cfg = Object.assign(cfg, JSON.parse(localStorage.getItem(CFG_KEY) || '{}')); } catch (e) { }
@@ -58,8 +67,9 @@
       });
       if (!j.ok) { setStatus('error', j.message || 'Sync unavailable'); return; }
       lastPushed = body;
+      lastSize = body.length;
       dirty = false;
-      window.MNApp.merge(j.state);
+      if (window.MNApp.merge(j.state)) lastActivity = Date.now();
       lastSyncAt = Date.now();
       setStatus('ok');
     } catch (e) {
@@ -74,7 +84,8 @@
     try {
       const j = await callApi('/api/sync?code=' + encodeURIComponent(cfg.code), { cache: 'no-store' });
       if (!j.ok) { setStatus('error', j.message || 'Sync unavailable'); return; }
-      window.MNApp.merge(j.state);
+      if (window.MNApp.merge(j.state)) lastActivity = Date.now();
+      lastSize = JSON.stringify(j.state || {}).length;
       lastSyncAt = Date.now();
       setStatus('ok');
     } catch (e) {
@@ -97,16 +108,24 @@
   function schedulePush() {
     if (!cfg.code) return;
     dirty = true;
+    lastActivity = Date.now();
     setStatus('syncing');
     clearTimeout(pushTimer);
     pushTimer = setTimeout(push, PUSH_DELAY);
   }
+  function pollDelay() {
+    const idle = Date.now() - lastActivity;
+    for (const [within, delay] of POLL_STEPS) if (idle < within) return delay;
+    return POLL_STEPS[POLL_STEPS.length - 1][1];
+  }
   function startPolling() {
-    clearInterval(pollTimer);
+    clearTimeout(pollTimer);
     if (!cfg.code) return;
-    pollTimer = setInterval(() => {
+    const tick = () => {
       if (document.visibilityState !== 'hidden') { dirty ? push() : pull(); }
-    }, POLL_EVERY);
+      pollTimer = setTimeout(tick, pollDelay());
+    };
+    pollTimer = setTimeout(tick, pollDelay());
   }
 
   /* ------------------------------ status ---------------------------- */
@@ -131,6 +150,13 @@
     strip.dataset.state = cfg.code ? status : 'off';
     const live = document.getElementById('syncState');
     if (live) live.textContent = label();
+    const size = document.getElementById('syncSize');
+    if (size) {
+      const bytes = lastSize || (window.MNApp ? JSON.stringify(window.MNApp.snapshot()).length : 0);
+      const kb = bytes / 1024;
+      size.textContent = 'Workspace size: ' + (kb < 1024 ? kb.toFixed(1) + ' KB' : (kb / 1024).toFixed(2) + ' MB') +
+        '. Only the current version is stored, not a copy per change.';
+    }
   }
 
   /* ------------------------------- panel ---------------------------- */
@@ -164,6 +190,7 @@
         documents. Turning sync off here keeps your documents on this device and leaves the
         server copy alone.</p>
         <p class="modal-note" id="syncState"></p>
+        <p class="modal-note" id="syncSize"></p>
       </div>`;
     host.appendChild(card);
 
@@ -181,7 +208,7 @@
     card.querySelector('[data-off]').addEventListener('click', () => {
       cfg.code = null; saveCfg();
       lastPushed = ''; dirty = false;
-      clearInterval(pollTimer); clearTimeout(pushTimer);
+      clearTimeout(pollTimer); clearTimeout(pushTimer);
       setStatus('off'); close();
       if (window.MNApp) window.MNApp.toast('Sync switched off on this device');
     });

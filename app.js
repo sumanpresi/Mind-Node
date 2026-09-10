@@ -947,7 +947,10 @@ function canvasSetup() {
     const noteIc = e.target.closest('[data-note]');
     const linkIc = e.target.closest('[data-link]');
     const addBtn = e.target.closest('[data-add]');
-    if (foldBtn || taskBtn || noteIc || linkIc || addBtn) return;
+    /* Controls sitting on top of the canvas must not start a pan. Capturing
+       the pointer would send their click to the canvas instead of to them. */
+    const overlay = e.target.closest('#zoombar, #ctx, .hint');
+    if (foldBtn || taskBtn || noteIc || linkIc || addBtn || overlay) return;
     /* While a node is being typed into, the canvas stays put. The browser
        still blurs the field, which commits the text. */
     if (editing) return;

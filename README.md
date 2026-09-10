@@ -209,6 +209,15 @@ Every device keeps a full copy of your documents in its own browser storage, whi
 what makes the app usable offline. With sync on, that copy is reconciled with the shared
 one on Vercel every few seconds and whenever you return to the tab.
 
+The sync panel shows how much space the workspace takes. Only the current version is
+kept, never a copy per change, so it grows with the size of your maps and not with how
+often you edit. Text is cheap: roughly 280 bytes a node, so a thousand nodes is under
+300 KB. Embedded photos are what actually consume the store, at 20 to 70 KB each.
+
+Checking for other devices costs one database command, so the app checks every 15
+seconds while you are working, drops to 45 seconds after a couple of quiet minutes and
+2.5 minutes after that, and stops entirely when the tab is hidden.
+
 **Export** in the sidebar still saves a `.json` backup of everything, and **Import**
 brings it back. Worth doing occasionally: browser storage can be cleared by the browser
 itself, and the free Redis plan is not a backup service.
