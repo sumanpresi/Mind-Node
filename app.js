@@ -779,14 +779,20 @@ function buildNodeEl(id) {
     e.className = 'n-emoji'; e.textContent = n.emoji; head.appendChild(e);
   }
   const txt = document.createElement('span');
-  txt.className = 'txt';
+  const headerLinked = !!(n.checklist && n.url && n.url.trim());
+  txt.className = 'txt' + (headerLinked ? ' has-link' : '');
   txt.textContent = n.text;
+  if (headerLinked) txt.dataset.linkpeek = id;
   head.appendChild(txt);
 
   const meta = [];
   if (UI.showNotes && n.note.trim()) meta.push(`<span class="n-note-ic" data-note="${id}">📝</span>`);
   if (n.link && S.docs[n.link]) meta.push(`<span class="n-link-ic" data-link="${id}" title="Open linked document">🔗</span>`);
-  if (n.url) meta.push(`<span class="n-url-ic" data-url="${id}" title="Open link">↗</span>`);
+  if (n.checklist) {
+    meta.push(`<span class="n-url-ic link-manage${headerLinked ? ' has-url' : ''}" data-linkbtn="${id}" title="${headerLinked ? 'Edit link' : 'Add link'}">${headerLinked ? '↗' : '🔗'}</span>`);
+  } else if (n.url) {
+    meta.push(`<span class="n-url-ic" data-url="${id}" title="Open link">↗</span>`);
+  }
   if (meta.length) {
     const m = document.createElement('span');
     m.className = 'n-meta'; m.innerHTML = meta.join('');
@@ -841,10 +847,23 @@ function buildChecklistBody(n) {
     row.appendChild(hit);
 
     const txt = document.createElement('span');
-    txt.className = 'check-txt' + (c.done ? ' done' : '');
+    const linked = !!(c.url && c.url.trim());
+    txt.className = 'check-txt' + (c.done ? ' done' : '') + (linked ? ' has-link' : '');
     txt.textContent = c.text || 'Untitled';
     txt.dataset.txt = cid;
+    if (linked) txt.dataset.linkpeek = cid;
     row.appendChild(txt);
+
+    const linkBtn = document.createElement('button');
+    linkBtn.type = 'button';
+    linkBtn.className = 'check-link-hit' + (linked ? ' has-url' : '');
+    linkBtn.dataset.linkbtn = cid;
+    linkBtn.setAttribute('aria-label', linked ? 'Edit link' : 'Add link');
+    const glyph = document.createElement('span');
+    glyph.className = 'check-link';
+    glyph.textContent = '🔗';
+    linkBtn.appendChild(glyph);
+    row.appendChild(linkBtn);
 
     wrap.appendChild(row);
   });
@@ -1172,11 +1191,12 @@ function canvasSetup() {
     const linkIc = e.target.closest('[data-link]');
     const urlIc = e.target.closest('[data-url]');
     const addBtn = e.target.closest('[data-add]');
-    const checklistUi = e.target.closest('.checklist');
+    const checkCtl = e.target.closest('[data-checkbox], [data-checkadd]');
+    const linkCtl = e.target.closest('[data-linkbtn], [data-linkpeek]');
     /* Controls sitting on top of the canvas must not start a pan. Capturing
        the pointer would send their click to the canvas instead of to them. */
-    const overlay = e.target.closest('#zoombar, #ctx, .hint');
-    if (foldBtn || taskBtn || noteIc || linkIc || urlIc || addBtn || checklistUi || overlay) return;
+    const overlay = e.target.closest('#zoombar, #ctx, .hint, #linkPop');
+    if (foldBtn || taskBtn || noteIc || linkIc || urlIc || addBtn || checkCtl || linkCtl || overlay) return;
     /* While a node is being typed into, the canvas stays put. The browser
        still blurs the field, which commits the text. */
     if (editing) return;
@@ -1189,6 +1209,12 @@ function canvasSetup() {
       return;
     }
     const nodeEl = e.target.closest('.node');
+    /* A checklist row (its text/whitespace, not the checkbox or + which are
+       already excluded above) belongs to one specific child, not the whole
+       parent branch: it must not drag the parent, but long-press should
+       still open a context menu — for that child, not the parent. */
+    const checkRow = e.target.closest('.check-row:not(.check-add-row)');
+    const checkRowTxt = checkRow ? checkRow.querySelector('[data-txt]') : null;
     canvas.setPointerCapture(e.pointerId);
 
     /* touch and pen: hold still for half a second to get the menu */
@@ -1198,14 +1224,16 @@ function canvasSetup() {
       lpTimer = setTimeout(() => {
         lpTimer = null;
         if (Date.now() - lastCtxAt < 700) return;   // the browser already offered one
-        const target = nodeEl ? nodeEl.dataset.id : null;
+        const target = checkRowTxt ? checkRowTxt.dataset.txt : (nodeEl ? nodeEl.dataset.id : null);
         const at = lpStart;
         cancelGestures();
         if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { } }
         openContextMenu(at.x, at.y, target);
       }, 520);
     }
-    if (nodeEl && !editing) {
+    if (checkRow) {
+      // no drag, no pan — just wait to see if this becomes a long-press or a plain tap
+    } else if (nodeEl && !editing) {
       const id = nodeEl.dataset.id;
       nodeDrag = { id, sx: e.clientX, sy: e.clientY, moved: false, ids: new Set([id, ...descendants(id)]) };
     } else {
@@ -1310,15 +1338,18 @@ function canvasSetup() {
     if (editing) return;                       // let the browser handle text fields
     e.preventDefault();
     lastCtxAt = Date.now();
-    const el = e.target.closest('.node');
+    const real = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+    const checkTxt = real.closest('[data-txt]');
+    const el = real.closest('.node');
     const at = { x: e.clientX, y: e.clientY };
-    const target = el ? el.dataset.id : null;
+    const target = checkTxt ? checkTxt.dataset.txt : (el ? el.dataset.id : null);
     cancelGestures();
     openContextMenu(at.x, at.y, target);
   });
 
   document.addEventListener('pointerdown', e => {
     if ($('#ctx') && !e.target.closest('#ctx')) closeContextMenu();
+    if ($('#linkPop') && !e.target.closest('#linkPop') && !e.target.closest('[data-linkbtn], [data-linkpeek]')) closeLinkPopover();
   }, true);
   window.addEventListener('blur', closeContextMenu);
 
@@ -1330,9 +1361,13 @@ function canvasSetup() {
   canvas.addEventListener('pointerleave', () => { hoverId = null; positionHandles(); });
 
   canvas.addEventListener('dblclick', e => {
-    const checkTxt = e.target.closest('[data-txt]');
+    // setPointerCapture() on this canvas can retarget the derived dblclick
+    // event to the canvas itself once a drag/pan gesture was armed for this
+    // pointer; resolving by coordinate sidesteps that entirely.
+    const real = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+    const checkTxt = real.closest('[data-txt]');
     if (checkTxt) { editNode(checkTxt.dataset.txt); return; }
-    const el = e.target.closest('.node');
+    const el = real.closest('.node');
     if (el) editNode(el.dataset.id);
   });
 
@@ -1379,6 +1414,22 @@ function canvasSetup() {
       const id = checkAdd.dataset.checkadd;
       if (!id || !N(id)) return;
       newChild(id); return;
+    }
+    const linkBtn = e.target.closest('[data-linkbtn]');
+    if (linkBtn) {
+      const id = linkBtn.dataset.linkbtn;
+      if (!id || !N(id)) return;
+      const r = linkBtn.getBoundingClientRect();
+      openLinkPopover(id, r.left, r.bottom + 6);
+      return;
+    }
+    const linkPeek = e.target.closest('[data-linkpeek]');
+    if (linkPeek) {
+      const id = linkPeek.dataset.linkpeek;
+      if (!id || !N(id)) return;
+      const r = linkPeek.getBoundingClientRect();
+      openLinkPopover(id, r.left, r.bottom + 6);
+      return;
     }
   });
 }
@@ -1433,6 +1484,7 @@ function closeContextMenu() {
 }
 function openContextMenu(x, y, id) {
   closeContextMenu();
+  closeLinkPopover();
   if (editing) return;
   const d = doc();
   const menu = document.createElement('div');
@@ -1523,12 +1575,84 @@ function openContextMenu(x, y, id) {
   if (id) render();
 }
 
+/* =====================================================================
+   Link popover — a quick way to attach a URL to a task or checklist
+   subtask without leaving the map for the full "Style and notes" panel.
+   Reuses the same n.url field and open-link logic the Inspector and the
+   header ↗ icon already use; this is just a faster way to reach it.
+   ===================================================================== */
+let linkPopEl = null;
+function closeLinkPopover() {
+  if (linkPopEl) { linkPopEl.remove(); linkPopEl = null; }
+}
+function positionFloating(el, x, y) {
+  const r = el.getBoundingClientRect(), pad = 8;
+  const left = Math.max(pad, Math.min(x, window.innerWidth - r.width - pad));
+  const top = Math.max(pad, Math.min(y, window.innerHeight - r.height - pad));
+  el.style.left = left + 'px';
+  el.style.top = top + 'px';
+}
+function openUrl(u) {
+  if (u) window.open(/^https?:\/\//i.test(u) ? u : 'https://' + u, '_blank', 'noopener');
+}
+function openLinkPopover(id, x, y, forceEdit) {
+  const n = N(id);
+  if (!n) return;
+  closeLinkPopover(); closeContextMenu();
+  const hasUrl = !!(n.url && n.url.trim());
+  const editing2 = forceEdit || !hasUrl;
+  const box = document.createElement('div');
+  box.id = 'linkPop';
+  box.innerHTML = editing2
+    ? `<input type="text" placeholder="Paste a link, e.g. docs.google.com/…">
+       <div class="lp-row">
+         ${hasUrl ? '<button type="button" class="lp-btn lp-remove">Remove</button>' : ''}
+         <button type="button" class="lp-btn lp-save">Save</button>
+       </div>`
+    : `<div class="lp-url">${escapeHtml(n.url)}</div>
+       <div class="lp-row">
+         <button type="button" class="lp-btn lp-remove">Remove</button>
+         <button type="button" class="lp-btn lp-edit">Edit</button>
+         <button type="button" class="lp-btn lp-open">Open ↗</button>
+       </div>`;
+  document.body.appendChild(box);
+  positionFloating(box, x, y);
+  linkPopEl = box;
+
+  const remove = box.querySelector('.lp-remove');
+  if (remove) remove.addEventListener('click', () => {
+    pushUndo(); n.url = ''; save(); render(); closeLinkPopover();
+  });
+
+  if (editing2) {
+    const input = box.querySelector('input');
+    input.value = n.url || '';
+    input.focus(); input.select();
+    const commit = () => {
+      pushUndo();
+      n.url = input.value.trim();
+      save(); render();
+      closeLinkPopover();
+    };
+    box.querySelector('.lp-save').addEventListener('click', commit);
+    input.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeLinkPopover(); }
+    });
+  } else {
+    box.querySelector('.lp-open').addEventListener('click', () => { const u = n.url; closeLinkPopover(); openUrl(u); });
+    box.querySelector('.lp-edit').addEventListener('click', () => openLinkPopover(id, x, y, true));
+  }
+}
+
 /* ---------------------------- text editing ------------------------- */
 function readText(el) {
   const t = (el.innerText != null) ? el.innerText : el.textContent;
   return (t || '');
 }
 function editNode(id) {
+  closeLinkPopover();
   if (editing === id) return;
   const el = $(`#nodes .node[data-id="${id}"] .txt`) || $(`#nodes [data-txt="${id}"]`) || $(`#outline [data-txt="${id}"]`);
   if (!el) return;
@@ -1650,6 +1774,7 @@ function keySetup() {
     if (e.key === '/') { e.preventDefault(); UI.sidebar = true; render(); $('#search').focus(); return; }
     if (e.key === 'Escape') {
       if ($('#ctx')) { closeContextMenu(); return; }
+      if ($('#linkPop')) { closeLinkPopover(); return; }
       if (connectFrom) { connectFrom = null; render(); }
       else if (UI.focusMode) { UI.focusMode = false; render(); }
       else if (UI.highlightTag) { UI.highlightTag = null; render(); }

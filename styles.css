@@ -378,6 +378,23 @@ button{cursor:pointer;background:none;border:0}
   padding:6px 2px;margin:-6px 0;         /* enlarges the tap target without adding visual gap */
 }
 .check-txt.done{color:var(--muted);text-decoration:line-through}
+.check-txt.has-link{color:var(--link);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
+
+/* task/subtask link affordance — a quick way in, separate from the full
+   Style-and-notes panel. Dim outline glyph when unset, solid once a link
+   exists; tapping either the icon or the (now-underlined) text opens the
+   same small popover rather than navigating immediately, so a stray tap
+   can never yank you out of the app. */
+.check-link-hit{
+  appearance:none;-webkit-appearance:none;border:0;background:transparent;padding:0;margin:0;
+  width:28px;height:28px;flex:0 0 28px;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;touch-action:manipulation;opacity:.4;
+}
+.check-link-hit.has-url{opacity:1}
+.check-link{font-size:12px;line-height:1}
+.n-url-ic.link-manage:not(.has-url){opacity:.4}
+.txt.has-link{color:var(--link);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px;cursor:pointer}
 
 .check-add-hit{
   appearance:none;-webkit-appearance:none;border:0;background:transparent;padding:0;margin:0;
@@ -396,13 +413,37 @@ button{cursor:pointer;background:none;border:0}
 /* Samsung Galaxy Fold / iPhone Pro Max and other touch screens: grow the
    tap targets to the 40-44px minimum without inflating text or row height. */
 @media (pointer:coarse){
-  .check-hit,.check-add-hit{width:44px;height:44px;flex-basis:44px}
+  .check-hit,.check-add-hit,.check-link-hit{width:44px;height:44px;flex-basis:44px}
   .check-row{margin-left:4px}
   .check-row::before{width:19px}
 }
 @media (max-width:620px){
-  .check-hit,.check-add-hit{width:42px;height:42px;flex-basis:42px}
+  .check-hit,.check-add-hit,.check-link-hit{width:42px;height:42px;flex-basis:42px}
   .check-txt{font-size:14px}
+}
+
+/* ---- link popover: quick add/edit/open for a task's or subtask's URL ---- */
+#linkPop{
+  position:fixed;z-index:60;background:var(--surface);border:1px solid var(--line);
+  border-radius:10px;box-shadow:var(--shadow);padding:8px;min-width:220px;max-width:280px;
+}
+#linkPop input{
+  width:100%;box-sizing:border-box;padding:8px 9px;border-radius:7px;
+  border:1px solid var(--line);font-size:13.5px;background:var(--surface-2);color:var(--text);
+}
+#linkPop input:focus{outline:2px solid var(--accent);outline-offset:1px}
+#linkPop .lp-url{
+  font-size:13px;color:var(--link);word-break:break-all;padding:2px 2px 8px;max-height:60px;overflow:auto;
+}
+#linkPop .lp-row{display:flex;gap:6px;margin-top:8px;justify-content:flex-end;flex-wrap:wrap}
+#linkPop .lp-btn{
+  appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--text);
+  padding:7px 12px;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;touch-action:manipulation;
+}
+#linkPop .lp-save,#linkPop .lp-open{background:var(--accent);color:#fff;border-color:var(--accent)}
+#linkPop .lp-remove{color:var(--danger);border-color:transparent}
+@media (pointer:coarse){
+  #linkPop .lp-btn{padding:9px 13px;font-size:13.5px}
 }
 
 /* the + that appears on a branch to drop a new node in */
