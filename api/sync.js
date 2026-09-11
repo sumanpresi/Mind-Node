@@ -19,11 +19,20 @@ const REDIS_TOKEN =
   process.env.REDIS_REST_API_TOKEN || '';
 
 /* The workspace itself never expires. Losing a year of notes because the
-   app went unopened would be the worst thing this service could do. */
-const MAX_BYTES = 8 * 1024 * 1024;           // well inside the 10 MB request limit
-const HISTORY_KEEP = 10;                     // versions kept for recovery
+   app went unopened would be the worst thing this service could do.
+
+   Budget for a ~30 MB Redis plan, with a large safety margin (images are
+   never part of this payload — see imageId in app.js — so this is a
+   budget for text and structure only):
+     current workspace   5 MB max  (MAX_BYTES, matches the client)
+     recovery history     5 MB max (5 versions x 1 MB, see HISTORY_*)
+     -----------------------------
+     total                10 MB of the ~30 MB available, comfortably clear
+   of Redis key/metadata overhead and any future growth. */
+const MAX_BYTES = 5 * 1024 * 1024;
+const HISTORY_KEEP = 5;                      // versions kept for recovery
 const HISTORY_EVERY = 10 * 60 * 1000;        // at most one version per 10 minutes
-const HISTORY_MAX_BYTES = 2 * 1024 * 1024;   // do not archive very large workspaces
+const HISTORY_MAX_BYTES = 1 * 1024 * 1024;   // do not archive very large workspaces
 const HISTORY_TTL = 60 * 60 * 24 * 730;      // the trail itself is dropped after two years
 const SCHEMA = 1;
 
@@ -171,7 +180,7 @@ module.exports = async (req, res) => {
       if (payload.length > MAX_BYTES) {
         res.status(413).json({
           ok: false,
-          message: 'This workspace is too large to sync. Remove some images, or split it across documents.'
+          message: 'This workspace is too large to sync. Try splitting it across documents.'
         });
         return;
       }

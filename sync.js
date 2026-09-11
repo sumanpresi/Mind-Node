@@ -17,7 +17,10 @@
     [Infinity, 150000]          // otherwise                 -> every 2.5 min
   ];
   const CODE_RE = /^[a-z0-9][a-z0-9-]{5,63}$/;
-  const MAX_BYTES = 3 * 1024 * 1024;
+  /* Matches the server's MAX_BYTES in api/sync.js. Images no longer count
+     against this — they never leave the device (see imageId in app.js) —
+     so this is now purely a budget for text and structure. */
+  const MAX_BYTES = 5 * 1024 * 1024;
 
   let cfg = { code: null };
   let status = 'off';           // off | syncing | ok | offline | error
@@ -57,7 +60,7 @@
     const exclude = dropSamples ? window.MNApp.sampleIds() : [];
     const body = JSON.stringify({ code: cfg.code, state: window.MNApp.snapshot(exclude) });
     if (body === lastPushed && !dirty) { setStatus('ok'); return; }
-    if (body.length > MAX_BYTES) { setStatus('error', 'Too large to sync — remove some images'); return; }
+    if (body.length > MAX_BYTES) { setStatus('error', 'This workspace is too large to sync — try splitting it across documents'); return; }
 
     busy = true; setStatus('syncing');
     try {
@@ -236,7 +239,9 @@
       </div>
       <div class="modal-body">
         <p class="modal-p">Give every device the same workspace code and they share the same
-        documents. Edits travel both ways a couple of seconds after you make them.</p>
+        documents. Edits travel both ways a couple of seconds after you make them.
+        Images stay on the device that added them and are not part of the sync payload,
+        so a photo added on your phone won't appear on your laptop.</p>
         <label class="modal-label" for="syncCode">Workspace code</label>
         <div class="modal-row">
           <input class="f-input" id="syncCode" spellcheck="false" autocomplete="off"
@@ -254,7 +259,7 @@
         <p class="modal-note" id="syncSize"></p>
         <div class="ver-block" id="verBlock" hidden>
           <div class="modal-label" style="margin-top:14px">Earlier versions</div>
-          <p class="modal-note" style="margin-top:0">The server keeps the last ten, about one for every
+          <p class="modal-note" style="margin-top:0">The server keeps the last five, about one for every
           ten minutes of editing. Restoring puts that version on every device.</p>
           <button class="chip" id="verLoad">Show earlier versions</button>
           <div id="verList"></div>

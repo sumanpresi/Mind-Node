@@ -99,6 +99,85 @@ function idbKeys() {
   }));
 }
 
+/* ---------------------------- image store --------------------------
+   Images used to live inline as base64 inside each node (n.image), so
+   every edit re-serialised and re-synced every photo the workspace had,
+   and the 30 MB cloud budget filled up almost entirely with pictures
+   instead of the text and structure that actually matter. Now a node
+   just holds n.imageId; the bytes live in their own IndexedDB key,
+   never touch JSON.stringify for change-detection or sync, and so never
+   leave this device. Legacy n.image (from before this change, or from
+   an older client still writing that way) is migrated the moment it is
+   seen, so nothing already saved is ever lost or shown broken. */
+const IMAGE_PREFIX = 'image:';
+let imageCache = {};   // imageId -> data URL, populated for whatever is on screen
+
+function migrateLegacyImages() {
+  let changed = false;
+  Object.values(S.docs).forEach(d => {
+    Object.values(d.nodes).forEach(n => {
+      if (!n.imageId && n.image) {
+        const id = uid();
+        imageCache[id] = n.image;
+        idbSet(n.image, IMAGE_PREFIX + id).catch(() => { });
+        n.imageId = id;
+        n.image = '';
+        changed = true;
+      }
+    });
+  });
+  return changed;
+}
+async function preloadImageCache() {
+  const wanted = new Set();
+  Object.values(S.docs).forEach(d => Object.values(d.nodes).forEach(n => {
+    if (n.imageId && imageCache[n.imageId] === undefined) wanted.add(n.imageId);
+  }));
+  if (!wanted.size) return;
+  let any = false;
+  for (const id of wanted) {
+    try {
+      const val = await idbGet(IMAGE_PREFIX + id);
+      if (val) { imageCache[id] = val; any = true; }
+    } catch (e) { /* this device never had this image — render() shows nothing for it */ }
+  }
+  if (any) render();
+}
+function imageSrcFor(n) {
+  if (n.imageId) return imageCache[n.imageId] || '';
+  return n.image || '';           // not yet migrated, or arrived mid-session
+}
+function setNodeImage(n, dataUrl) {
+  const id = uid();
+  imageCache[id] = dataUrl;
+  idbSet(dataUrl, IMAGE_PREFIX + id).catch(() => {
+    toast('This device could not store that image.');
+  });
+  n.imageId = id;
+  n.image = '';
+}
+function clearNodeImage(n) {
+  const id = n.imageId;
+  n.imageId = ''; n.image = '';
+  if (!id) return;
+  const stillUsed = Object.values(S.docs).some(d =>
+    Object.values(d.nodes).some(x => x.imageId === id));
+  if (!stillUsed) { delete imageCache[id]; idbDel(IMAGE_PREFIX + id).catch(() => { }); }
+}
+/* Exported files must stay self-contained — a .json backup opened five
+   years from now, on a device that never held these images, still needs
+   to show them. So export rehydrates imageId back into inline data. */
+function embedImagesForExport(docsObj) {
+  const copy = JSON.parse(JSON.stringify(docsObj));
+  Object.values(copy).forEach(d => {
+    Object.values(d.nodes || {}).forEach(n => {
+      if (n.imageId) n.image = imageCache[n.imageId] || n.image || '';
+      delete n.imageId;
+    });
+  });
+  return copy;
+}
+
 function localRaw() {
   try { return store.getItem(KEY); } catch (e) { return null; }
 }
@@ -145,7 +224,7 @@ function mkNode(parent, text) {
   return {
     id: uid(), parent, text: text || '', children: [], collapsed: false,
     shape: 'rounded', color: null, border: 2, lineStyle: 'solid',
-    note: '', tags: [], done: false, emoji: '', image: '', link: null,
+    note: '', tags: [], done: false, emoji: '', image: '', imageId: '', link: null,
     checklist: false,
     x: null, y: null
   };
@@ -369,6 +448,7 @@ function hydrate(raw) {
       Object.values(d.nodes).forEach(n => { n.tags = n.tags || []; });
       contentSigs[d.id] = contentSig(d);
     });
+    migrateLegacyImages();
     workspaceSig = wsSig();
     return true;
   } catch (e) { return false; }
@@ -416,7 +496,7 @@ function pasteBranch(intoId, plain) {
     n.id = uid(); n.parent = parent; n.children = []; n.x = null; n.y = null;
     if (plain) {                       // arrive with the branch's own look
       n.shape = 'rounded'; n.color = null; n.border = 2; n.lineStyle = 'solid';
-      n.emoji = ''; n.image = '';
+      n.emoji = ''; n.image = ''; n.imageId = '';
     }
     d.nodes[n.id] = n;
     (src.children || []).forEach(c => { const k = clone(c, n.id); if (k) n.children.push(k.id); });
@@ -794,9 +874,9 @@ function buildNodeEl(id) {
     m.className = 'n-meta'; m.innerHTML = meta.join('');
     head.appendChild(m);
   }
-  if (UI.showImages && n.image) {
+  if (UI.showImages && imageSrcFor(n)) {
     const img = document.createElement('img');
-    img.className = 'n-img'; img.src = n.image; img.alt = '';
+    img.className = 'n-img'; img.src = imageSrcFor(n); img.alt = '';
     head.appendChild(img);
   }
   if (UI.showTags && n.tags.length) {
@@ -2096,10 +2176,10 @@ function panelMedia(id, w) {
   file.type = 'file'; file.accept = 'image/*'; file.className = 'f-input';
   file.addEventListener('change', () => {
     const f = file.files[0]; if (!f) return;
-    shrinkImage(f, dataUrl => { pushUndo(); n.image = dataUrl; save(); render(); });
+    shrinkImage(f, dataUrl => { pushUndo(); setNodeImage(n, dataUrl); save(); render(); });
   });
   media.appendChild(file);
-  if (n.image) media.appendChild(chipBtn('Remove image', () => { pushUndo(); n.image = ''; save(); render(); }));
+  if (imageSrcFor(n)) media.appendChild(chipBtn('Remove image', () => { pushUndo(); clearNodeImage(n); save(); render(); }));
   w.appendChild(group('Image', media));
 }
 
@@ -2381,11 +2461,11 @@ function envelope(docs, order) {
   }, null, 2);
 }
 function exportAll() {
-  download('mindnote-' + stamp() + '.json', envelope(S.docs, S.order));
+  download('mindnote-' + stamp() + '.json', envelope(embedImagesForExport(S.docs), S.order));
   toast('Exported every document');
 }
 function exportDoc(d) {
-  download(d.name.replace(/[^\w\- ]/g, '') + '-' + stamp() + '.json', envelope({ [d.id]: d }, [d.id]));
+  download(d.name.replace(/[^\w\- ]/g, '') + '-' + stamp() + '.json', envelope(embedImagesForExport({ [d.id]: d }), [d.id]));
   toast('Exported this document');
 }
 function importJSON(text) {
@@ -2403,6 +2483,7 @@ function importJSON(text) {
       S.docs[fresh.id] = fresh;
       S.order.push(fresh.id);
     });
+    migrateLegacyImages();
     save(); render();
     toast('Import finished');
   } catch (e) {
@@ -2434,7 +2515,7 @@ async function openDataPanel() {
   card.className = 'modal-card';
   const size = JSON.stringify({ docs: S.docs, order: S.order }).length;
   const images = Object.values(S.docs).reduce((a, d) =>
-    a + Object.values(d.nodes).filter(n => n.image).length, 0);
+    a + Object.values(d.nodes).filter(n => n.imageId || n.image).length, 0);
 
   card.innerHTML = `
     <div class="modal-head">
@@ -2725,6 +2806,8 @@ window.MNApp = {
     S.order = (state.order || []).filter(id => docs[id]);
     for (const id of Object.keys(docs)) if (!S.order.includes(id)) S.order.push(id);
     deletedDocs = state.deleted || {};
+    migrateLegacyImages();
+    preloadImageCache();
 
     if (!S.docs[S.active]) { S.active = S.order[0]; UI.selected = null; }
     if (UI.selected && S.docs[S.active] && !S.docs[S.active].nodes[UI.selected]) UI.selected = null;
@@ -2797,6 +2880,7 @@ async function reconcile(raw) {
 
   document.dispatchEvent(new Event('mindnote:ready'));
 
+  preloadImageCache();
   maybeBackup();
   setInterval(maybeBackup, 60 * 60 * 1000);
 }
