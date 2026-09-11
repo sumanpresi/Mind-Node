@@ -779,7 +779,7 @@ function buildNodeEl(id) {
     e.className = 'n-emoji'; e.textContent = n.emoji; head.appendChild(e);
   }
   const txt = document.createElement('span');
-  const headerLinked = !!(n.checklist && n.url && n.url.trim());
+  const headerLinked = !!(n.url && n.url.trim());
   txt.className = 'txt' + (headerLinked ? ' has-link' : '');
   txt.textContent = n.text;
   if (headerLinked) txt.dataset.linkpeek = id;
@@ -788,11 +788,7 @@ function buildNodeEl(id) {
   const meta = [];
   if (UI.showNotes && n.note.trim()) meta.push(`<span class="n-note-ic" data-note="${id}">📝</span>`);
   if (n.link && S.docs[n.link]) meta.push(`<span class="n-link-ic" data-link="${id}" title="Open linked document">🔗</span>`);
-  if (n.checklist) {
-    meta.push(`<span class="n-url-ic link-manage${headerLinked ? ' has-url' : ''}" data-linkbtn="${id}" title="${headerLinked ? 'Edit link' : 'Add link'}">${headerLinked ? '↗' : '🔗'}</span>`);
-  } else if (n.url) {
-    meta.push(`<span class="n-url-ic" data-url="${id}" title="Open link">↗</span>`);
-  }
+  meta.push(`<span class="n-url-ic link-manage${headerLinked ? ' has-url' : ''}" data-linkbtn="${id}" title="${headerLinked ? 'Edit link' : 'Add link'}">${headerLinked ? '↗' : '🔗'}</span>`);
   if (meta.length) {
     const m = document.createElement('span');
     m.className = 'n-meta'; m.innerHTML = meta.join('');
@@ -1832,6 +1828,7 @@ function renderOutline() {
 }
 function olNode(id, lvl) {
   const d = doc(), n = N(id), box = document.createElement('div');
+  const linked = !!(n.url && n.url.trim());
   box.className = 'ol-lvl' + lvl;
 
   const row = document.createElement('div');
@@ -1858,12 +1855,25 @@ function olNode(id, lvl) {
   }
 
   const txt = document.createElement('div');
-  txt.className = 'ol-txt';
+  txt.className = 'ol-txt' + (linked ? ' has-link' : '');
   txt.dataset.txt = id;
   txt.textContent = (n.emoji ? n.emoji + ' ' : '') + (n.text || 'Untitled');
   txt.addEventListener('click', () => { UI.selected = id; render(); });
   txt.addEventListener('dblclick', () => editOutline(id, txt));
   row.appendChild(txt);
+
+  const linkBtn = document.createElement('button');
+  linkBtn.type = 'button';
+  linkBtn.className = 'ol-link-ic' + (linked ? ' has-url' : '');
+  linkBtn.title = linked ? 'Edit link' : 'Add link';
+  linkBtn.setAttribute('aria-label', linked ? 'Edit link' : 'Add link');
+  linkBtn.textContent = linked ? '↗' : '🔗';
+  linkBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    const r = linkBtn.getBoundingClientRect();
+    openLinkPopover(id, r.left, r.bottom + 6);
+  });
+  row.appendChild(linkBtn);
 
   n.tags.forEach(tid => {
     const tag = d.tags.find(t => t.id === tid); if (!tag) return;
