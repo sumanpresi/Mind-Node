@@ -178,9 +178,7 @@ System follows whatever your phone or PC is set to, including its night schedule
 **Undo and redo** — the two arrows at the left of the toolbar, or the usual keys. Sixty
 steps are kept per document.
 
-**Collapsed sidebar** — hide the documents panel on a wide screen and a slim icon rail
-takes its place, so search, a new document, the theme and the sync light stay one click
-away.
+**Collapsed sidebar** — see *The documents panel* below.
 
 ## Keyboard
 
@@ -218,6 +216,42 @@ Everything written carries `schemaVersion`, so future versions of MindNote can m
 old data instead of guessing at it. If a device ever finds data written by a *newer*
 version than the one running, it refuses to read it and says so, rather than reading it
 wrongly and saving the damage back.
+
+## The documents panel
+
+The panel on the left has three states, and it remembers which one you left it in
+on each device separately — a phone and a desktop monitor do not want the same
+width.
+
+| State | Width | What you see |
+| --- | --- | --- |
+| Open | 240–420px, your choice | Names, search, node counts |
+| Rail | 64px | A coloured tile per document, with its initials |
+| Hidden | none | The map has the whole screen |
+
+**Resize it** by dragging the right edge of the panel. It has two resting points:
+it resists at 240px, the narrowest width a document name is still readable at, and
+if you keep pulling left it becomes the rail. There is no width in between where
+the names are cut in half.
+
+**Collapse it** with the chevron at the top, by double-clicking the edge, with
+`Ctrl`/`Cmd` + `B`, or by dragging the edge past the detent.
+
+**On a touch screen** swipe in from the left edge of the screen to open the panel,
+and swipe left on the panel to put it away.
+
+**Identifying documents in the rail.** Every document has a tile: its colour, and
+one or two letters taken from its name — Field trip checklist becomes FT, NGDR Data
+becomes ND, Stakeholder related becomes SR. A document whose name starts with an
+emoji uses the emoji instead. The same tile appears next to the name when the panel
+is open, so the thing you learn to recognise at full width is the thing you click
+at 64px. The open document is marked with a bar on the edge, and hovering a tile —
+or holding it on a touch screen — shows the full name and node count.
+
+The rail is only used where it earns its space. On a phone the panel opens over the
+map and closes again, because 64 pixels of permanent furniture is a poor trade on a
+narrow screen. Folding the Fold shut therefore switches to that behaviour, and
+opening it brings your rail straight back.
 
 ## Earlier versions
 

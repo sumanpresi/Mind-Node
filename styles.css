@@ -65,46 +65,96 @@ button{cursor:pointer;background:none;border:0}
   background:var(--paper);
 }
 
-/* ============ collapsed icon rail (large screens) ============ */
-#rail{
-  display:none;width:52px;flex:0 0 52px;background:var(--ink);
-  flex-direction:column;align-items:center;gap:4px;
-  padding:12px 0 calc(12px + var(--safe-b));padding-top:calc(12px + var(--safe-t));z-index:39;
-}
-#app.side-hidden #rail{display:none}
-@media (min-width:901px){ #app.side-hidden #rail{display:flex} }
-.rail-mark{
-  width:22px;height:22px;border-radius:7px;margin-bottom:8px;
-  background:linear-gradient(135deg,var(--accent),#2fb6b0);
-  box-shadow:inset 0 0 0 2px rgba(255,255,255,.18);
-}
-.rail-btn{
-  width:36px;height:36px;border-radius:9px;display:grid;place-items:center;color:#9ea3c9;
-}
-.rail-btn:hover{background:rgba(255,255,255,.12);color:#fff}
-.rail-spacer{flex:1}
-#railSync .sync-dot{width:9px;height:9px}
-#railSync[data-state="ok"] .sync-dot{background:#3dbe73}
-#railSync[data-state="syncing"] .sync-dot{background:#f0b429}
-#railSync[data-state="offline"] .sync-dot{background:#f2842a}
-#railSync[data-state="error"] .sync-dot{background:#e9576b}
+/* =====================================================================
+   SIDEBAR — one panel, three modes.
+   Width is a single live variable (--side-w) set by app.js. The panel
+   animates that one property, so there is never a second element
+   appearing or disappearing underneath it.
 
-/* ================= sidebar ================= */
+     wide    240-420px   names, search, counts
+     rail    64px        colour + initial chips, tooltips
+     hidden  0px         overlay mode only
+
+   Presentation flips at the mode boundary, not gradually, so text is
+   never caught half-cut.
+   ===================================================================== */
 #sidebar{
   width:var(--side-w);
   flex:0 0 var(--side-w);
+  min-width:0;
+  position:relative;
   background:var(--ink);
   color:#e8e9f5;
   display:flex;
   flex-direction:column;
   padding-top:var(--safe-t);
   padding-bottom:var(--safe-b);
-  transition:margin-left .22s ease;
+  transition:width .2s cubic-bezier(.4,0,.2,1);
   z-index:40;
+  overflow:hidden;
 }
-#app.side-hidden #sidebar{margin-left:calc(-1 * var(--side-w))}
+/* while the handle is held, follow the pointer exactly */
+#app.side-dragging #sidebar{transition:none}
+#app.side-dragging{cursor:col-resize;user-select:none}
+#app.side-dragging *{cursor:col-resize !important}
 
-.side-head{display:flex;align-items:center;justify-content:space-between;padding:14px 14px 10px}
+#app[data-side="hidden"] #sidebar{width:0;flex-basis:0;border-right:0}
+
+/* what each mode shows */
+#app[data-side="rail"] .wide-only{display:none !important}
+#app[data-side="wide"] .rail-only,
+#app[data-side="hidden"] .rail-only{display:none !important}
+
+/* ---- resize handle ---- */
+.side-resizer{
+  position:absolute;top:0;right:0;bottom:0;width:11px;
+  cursor:col-resize;z-index:3;touch-action:none;
+  background:transparent;
+}
+.side-resizer::after{
+  content:"";position:absolute;top:0;bottom:0;right:0;width:3px;
+  background:var(--accent);opacity:0;transition:opacity .15s ease;
+}
+.side-resizer:hover::after,
+.side-resizer:focus-visible::after,
+#app.side-dragging .side-resizer::after{opacity:1}
+.side-resizer:focus-visible{outline:none}
+#app[data-side="hidden"] .side-resizer{display:none}
+
+/* ---- head ---- */
+.brand{
+  display:flex;align-items:center;gap:9px;padding:4px 2px;border-radius:9px;
+  color:inherit;min-width:0;
+}
+.brand:hover{background:rgba(255,255,255,.08)}
+.brand-mark{
+  width:22px;height:22px;border-radius:7px;flex:0 0 22px;
+  background:linear-gradient(135deg,var(--accent),#2fb6b0);
+  box-shadow:inset 0 0 0 2px rgba(255,255,255,.18);
+}
+.brand-name{font-weight:800;letter-spacing:-.02em;font-size:17px;white-space:nowrap}
+
+/* ---- rail buttons ---- */
+.rail-btn{
+  width:40px;height:40px;border-radius:10px;display:grid;place-items:center;
+  color:#9ea3c9;flex:0 0 auto;margin:0 auto;position:relative;
+}
+.rail-btn:hover{background:rgba(255,255,255,.12);color:#fff}
+
+/* ---- tooltips, so a 64px rail is still legible ---- */
+.side-tip{
+  position:fixed;z-index:120;pointer-events:none;
+  background:var(--ink);color:#fff;border:1px solid rgba(255,255,255,.14);
+  padding:7px 11px;border-radius:9px;font-size:12.5px;font-weight:600;
+  white-space:nowrap;box-shadow:0 8px 24px rgba(0,0,0,.4);
+  opacity:0;transform:translateX(-4px);transition:opacity .12s ease,transform .12s ease;
+}
+.side-tip.show{opacity:1;transform:translateX(0)}
+.side-tip .tip-sub{display:block;font-weight:500;color:#9ea3c9;font-size:11px;margin-top:2px}
+
+.side-head{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:14px 12px 10px;min-width:0}
+#app[data-side="rail"] .side-head{justify-content:center;padding:14px 0 10px}
+#app[data-side="rail"] .brand{padding:8px}
 .brand{display:flex;align-items:center;gap:9px}
 .brand-mark{
   width:22px;height:22px;border-radius:7px;
@@ -112,9 +162,10 @@ button{cursor:pointer;background:none;border:0}
   box-shadow:inset 0 0 0 2px rgba(255,255,255,.18);
 }
 .brand-name{font-weight:800;letter-spacing:-.02em;font-size:17px}
-.side-head .icon-btn{color:#9ea3c9;font-size:13px}
+.side-head .icon-btn{color:#9ea3c9;flex:0 0 auto}
 
 .side-search{padding:0 12px 10px}
+#app[data-side="rail"] .side-scroll{padding:4px 0 8px}
 #search{
   width:100%;padding:9px 11px;border-radius:9px;border:1px solid rgba(255,255,255,.12);
   background:rgba(255,255,255,.07);color:#fff;font-size:13.5px;
@@ -122,22 +173,55 @@ button{cursor:pointer;background:none;border:0}
 #search::placeholder{color:#8d92b8}
 #search:focus{border-color:var(--accent);background:rgba(255,255,255,.11);outline:none}
 
-.side-scroll{flex:1;overflow:auto;padding:4px 8px 8px}
+.side-scroll{flex:1;overflow-y:auto;overflow-x:hidden;padding:4px 8px 8px;min-height:0}
 .side-label{font-size:11.5px;color:#8286ad;padding:6px 6px 8px;font-weight:600}
 
 .doc-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+
+/* A document is always the same token: its colour plus its initials.
+   The token is identical in both modes, only its size changes, so the
+   thing you learned to recognise at 260px is the thing you click at 64px. */
+.doc-chip{
+  flex:0 0 auto;display:grid;place-items:center;
+  width:24px;height:24px;border-radius:7px;
+  background:color-mix(in srgb, var(--dc) 26%, transparent);
+  color:var(--dc);
+  font-size:10px;font-weight:800;letter-spacing:.02em;line-height:1;
+  text-transform:uppercase;
+  box-shadow:inset 0 0 0 1.5px color-mix(in srgb, var(--dc) 55%, transparent);
+  transition:width .18s ease,height .18s ease,font-size .18s ease;
+}
 .doc-item{
-  display:flex;align-items:center;gap:8px;padding:8px 9px;border-radius:9px;
-  cursor:pointer;font-size:14px;color:#c9cce6;
+  display:flex;align-items:center;gap:9px;padding:7px 8px;border-radius:9px;
+  cursor:pointer;font-size:14px;color:#c9cce6;position:relative;min-width:0;
 }
 .doc-item:hover{background:rgba(255,255,255,.07)}
 .doc-item.is-active{background:rgba(255,255,255,.13);color:#fff;font-weight:600}
-.doc-dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px;background:var(--accent)}
-.doc-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.doc-count{font-size:11px;color:#8286ad}
-.doc-kill{opacity:0;color:#8286ad;font-size:12px;padding:2px 4px}
+.doc-item.is-active .doc-chip{
+  background:var(--dc);color:#fff;
+  box-shadow:0 0 0 2px color-mix(in srgb, var(--dc) 35%, transparent);
+}
+.doc-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.doc-count{font-size:11px;color:#8286ad;flex:0 0 auto;font-variant-numeric:tabular-nums}
+.doc-kill{opacity:0;color:#8286ad;font-size:12px;padding:2px 4px;flex:0 0 auto}
 .doc-item:hover .doc-kill,.doc-item.is-active .doc-kill{opacity:1}
 .doc-kill:hover{color:var(--danger)}
+
+/* rail: the chip grows to a comfortable touch target and centres */
+#app[data-side="rail"] .doc-item{
+  justify-content:center;padding:5px 0;gap:0;background:none;
+}
+#app[data-side="rail"] .doc-item:hover{background:none}
+#app[data-side="rail"] .doc-chip{width:40px;height:40px;border-radius:11px;font-size:14px}
+#app[data-side="rail"] .doc-item:hover .doc-chip{
+  box-shadow:inset 0 0 0 1.5px color-mix(in srgb, var(--dc) 55%, transparent),
+             0 0 0 3px rgba(255,255,255,.10);
+}
+/* the active document keeps a marker on the edge, readable at a glance */
+#app[data-side="rail"] .doc-item.is-active::before{
+  content:"";position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:3px;height:22px;border-radius:0 3px 3px 0;background:var(--dc);
+}
 
 .search-results{max-height:42vh;overflow:auto;padding:0 8px 8px;border-bottom:1px solid rgba(255,255,255,.09)}
 .sr{padding:8px 9px;border-radius:9px;cursor:pointer}
@@ -147,13 +231,18 @@ button{cursor:pointer;background:none;border:0}
 .sr-empty{color:#8d92b8;font-size:13px;padding:10px}
 
 .side-foot{padding:10px 12px;border-top:1px solid rgba(255,255,255,.09);display:flex;flex-direction:column;gap:8px}
+#app[data-side="rail"] .side-foot{padding:10px 0;align-items:center;gap:4px}
 .foot-row{display:flex;gap:6px}
 .ghost-btn{
+  display:flex;align-items:center;justify-content:center;gap:7px;
   width:100%;padding:9px;border-radius:9px;border:1px solid rgba(255,255,255,.16);
   color:#dfe1f2;font-size:13.5px;font-weight:600;background:rgba(255,255,255,.04);
 }
 .ghost-btn:hover{background:rgba(255,255,255,.12)}
 .ghost-btn.small{padding:7px 6px;font-size:12px;font-weight:500}
+.plus-ic{width:16px;height:16px;flex:0 0 16px}
+#app[data-side="wide"] .plus-ic,#app[data-side="hidden"] .plus-ic{display:none}
+#app[data-side="rail"] #newDoc{width:40px;height:40px;padding:0;border-radius:11px}
 
 /* sync strip */
 .sync-strip{
@@ -167,6 +256,8 @@ button{cursor:pointer;background:none;border:0}
 .sync-strip[data-state="offline"] .sync-dot{background:#f2842a}
 .sync-strip[data-state="error"] .sync-dot{background:#e9576b}
 .sync-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#app[data-side="rail"] .sync-strip{width:40px;height:40px;padding:0;justify-content:center;border-radius:11px}
+#app[data-side="rail"] .sync-dot{width:10px;height:10px}
 
 /* modal */
 #modal{
@@ -626,7 +717,7 @@ button{cursor:pointer;background:none;border:0}
    Foldable inner screen / small laptops  (<= 1100px)
    ========================================================= */
 @media (max-width:1100px){
-  :root{--side-w:224px;--insp-w:250px}
+  :root{--insp-w:250px}
   .doc-title{max-width:150px}
 }
 
@@ -634,9 +725,20 @@ button{cursor:pointer;background:none;border:0}
    Tablet + folded-open widths (<= 900px): panes float
    ========================================================= */
 @media (max-width:900px){
-  #sidebar{position:fixed;left:0;top:0;bottom:0;box-shadow:var(--shadow)}
-  #app.side-hidden #sidebar{margin-left:0;transform:translateX(-100%)}
-  #sidebar{transform:translateX(0);transition:transform .22s ease}
+  /* the panel leaves the flow and floats over the canvas, so opening it
+     never reflows the map on a phone */
+  #sidebar{
+    position:fixed;left:0;top:0;bottom:0;
+    width:min(var(--side-w),86vw);flex-basis:auto;
+    box-shadow:var(--shadow);
+    transform:translateX(0);
+    transition:transform .22s cubic-bezier(.4,0,.2,1),width .2s cubic-bezier(.4,0,.2,1);
+  }
+  #app[data-side="hidden"] #sidebar{width:min(var(--side-w),86vw);transform:translateX(-100%)}
+  #app.side-dragging #sidebar{transition:none}
+  /* a 64px rail wastes a phone screen: rail behaves as hidden here */
+  #app[data-side="rail"] #sidebar{transform:translateX(-100%)}
+  .side-resizer{width:16px}
   #inspector{position:fixed;right:0;top:0;bottom:0;width:290px;flex:none;box-shadow:var(--shadow)}
 }
 
@@ -695,7 +797,7 @@ button{cursor:pointer;background:none;border:0}
 }
 
 @media print{
-  #sidebar,#topbar,#inspector,#sheet,#zoombar,#rail{display:none !important}
+  #sidebar,#topbar,#inspector,#sheet,#zoombar{display:none !important}
   #app{height:auto}
   #canvas{overflow:visible;background:#fff}
 }

@@ -200,7 +200,7 @@ function storeSave(json) {
 /* ------------------------------- state ----------------------------- */
 let S = { docs: {}, order: [], active: null };
 let UI = {
-  view: 'map', theme: 'light', sidebar: true, inspector: false,
+  view: 'map', theme: 'light', inspector: false,
   showTasks: false, showNotes: true, showImages: true, showTags: true,
   focusMode: false, highlightTag: null, selected: null,
   inspTab: 'style', sheetTab: null
@@ -386,6 +386,233 @@ async function restoreBackup(key) {
   render();
   if (window.MNSync && window.MNSync.isOn()) window.MNSync.now();
   toast('Backup restored');
+}
+
+/* =====================================================================
+   SIDEBAR CONTROLLER
+
+   One panel, three modes, one animated property (width). The old build
+   animated margin-left on the panel while a separate 52px rail appeared
+   underneath it with `display`, which cannot animate — so the canvas was
+   shoved one way and dragged the other in the same frame, and every
+   intermediate frame showed document names cut in half.
+
+   Here the mode decides the presentation and the width follows. Crossing
+   a mode boundary swaps names for chips instantly, so there is no width
+   at which the panel is unreadable.
+
+   Width lives on the device, not in the synced workspace: a phone and a
+   27-inch monitor do not want the same number.
+   ===================================================================== */
+const SIDE_KEY   = 'mindnote.sidebar';
+const RAIL_W     = 64;    // icon + chip rail
+const MIN_WIDE   = 240;   // narrowest width a document name is still readable at
+const MAX_WIDE   = 420;
+const RAIL_SNAP  = 150;   // release left of this and the panel becomes a rail
+
+let side = { mode: 'wide', width: 260 };
+
+function sideLoad() {
+  try {
+    const raw = localStorage.getItem(SIDE_KEY);
+    if (raw) {
+      const v = JSON.parse(raw);
+      if (v && typeof v === 'object') {
+        if (['wide', 'rail', 'hidden'].includes(v.mode)) side.mode = v.mode;
+        if (Number.isFinite(v.width)) side.width = clamp(v.width, MIN_WIDE, MAX_WIDE);
+      }
+    }
+  } catch (e) { /* first run, or storage unavailable */ }
+}
+function sideSave() {
+  try { localStorage.setItem(SIDE_KEY, JSON.stringify(side)); } catch (e) { }
+}
+
+/* A 64px rail is a poor trade on a phone, so narrow screens only ever
+   show the panel or hide it.
+
+   side.mode is what the person chose; sideMode() is what fits on the
+   screen in front of them. Keeping the two apart means folding the phone
+   shut does not quietly throw away a rail preference — unfolding brings
+   it straight back. */
+const railAllowed = () => window.innerWidth > 900;
+function sideMode() {
+  if (side.mode === 'rail' && !railAllowed()) return 'hidden';
+  return side.mode;
+}
+
+function applySidebar() {
+  const app = document.getElementById('app');
+  if (!app) return;
+  const m = sideMode();
+  app.dataset.side = m;
+  const w = m === 'rail' ? RAIL_W : m === 'hidden' ? 0 : side.width;
+  app.style.setProperty('--side-w', w + 'px');
+  const res = document.getElementById('sideResizer');
+  if (res) {
+    res.setAttribute('aria-valuenow', String(w));
+    res.setAttribute('aria-valuemin', String(RAIL_W));
+    res.setAttribute('aria-valuemax', String(MAX_WIDE));
+  }
+}
+
+/* The dimmer behind a floating panel is not part of the map, so changing
+   modes must not cost a full map redraw to keep it in step. */
+function syncScrim() {
+  const sc = document.getElementById('scrim');
+  if (sc) sc.hidden = !(window.innerWidth <= 900 && (sideMode() === 'wide' || UI.inspector));
+}
+
+function setSide(mode, opts) {
+  side.mode = mode;
+  applySidebar();
+  sideSave();
+  if (!opts || !opts.quiet) renderDocList();
+  syncScrim();
+  hideSideTip();
+}
+function toggleSide() {
+  if (sideMode() === 'wide') setSide(railAllowed() ? 'rail' : 'hidden');
+  else setSide('wide');
+}
+
+/* ---------------------------- tooltips ----------------------------- */
+/* A rail is only usable if you can still tell what each chip is. */
+let sideTipEl = null, sideTipTimer = null;
+function sideTip(target, title, sub) {
+  if (sideMode() !== 'rail') return;
+  if (!sideTipEl) {
+    sideTipEl = document.createElement('div');
+    sideTipEl.className = 'side-tip';
+    sideTipEl.setAttribute('role', 'tooltip');
+    document.body.appendChild(sideTipEl);
+  }
+  sideTipEl.innerHTML = '';
+  sideTipEl.appendChild(document.createTextNode(title));
+  if (sub) {
+    const s2 = document.createElement('span');
+    s2.className = 'tip-sub';
+    s2.textContent = sub;
+    sideTipEl.appendChild(s2);
+  }
+  const r = target.getBoundingClientRect();
+  sideTipEl.style.left = (r.right + 10) + 'px';
+  sideTipEl.style.top = Math.max(6, r.top + r.height / 2 - 18) + 'px';
+  sideTipEl.classList.add('show');
+}
+function hideSideTip() {
+  clearTimeout(sideTipTimer);
+  if (sideTipEl) sideTipEl.classList.remove('show');
+}
+
+/* ------------------------- resize interaction ---------------------- */
+function wireResizer() {
+  const res = document.getElementById('sideResizer');
+  const app = document.getElementById('app');
+  if (!res || !app) return;
+  let dragging = false, moved = false;
+
+  const widthFor = x => {
+    const max = Math.min(MAX_WIDE, Math.round(window.innerWidth * 0.5));
+    /* Two detents. Left of RAIL_SNAP the panel locks to the rail, between
+       RAIL_SNAP and MIN_WIDE it resists at MIN_WIDE. The panel is therefore
+       never rendered at a width its own content cannot be read at. */
+    if (x < RAIL_SNAP && railAllowed()) return { mode: 'rail', width: side.width };
+    return { mode: 'wide', width: clamp(x, MIN_WIDE, max) };
+  };
+
+  res.addEventListener('pointerdown', e => {
+    if (e.button !== undefined && e.button !== 0) return;
+    dragging = true; moved = false;
+    res.setPointerCapture(e.pointerId);
+    app.classList.add('side-dragging');
+    hideSideTip();
+    e.preventDefault();
+  });
+
+  res.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    moved = true;
+    const next = widthFor(e.clientX);
+    const changedMode = next.mode !== sideMode();
+    side.mode = next.mode;
+    side.width = next.width;
+    applySidebar();
+    if (changedMode) renderDocList();   // swap names for chips at the boundary
+  });
+
+  const end = e => {
+    if (!dragging) return;
+    dragging = false;
+    app.classList.remove('side-dragging');
+    try { res.releasePointerCapture(e.pointerId); } catch (err) { }
+    if (moved) { sideSave(); renderDocList(); fitAfterResize(); }
+  };
+  res.addEventListener('pointerup', end);
+  res.addEventListener('pointercancel', end);
+
+  res.addEventListener('dblclick', () => { toggleSide(); fitAfterResize(); });
+
+  res.addEventListener('keydown', e => {
+    const step = e.shiftKey ? 48 : 16;
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      if (sideMode() === 'rail') return;
+      const w = side.width - step;
+      if (w < RAIL_SNAP && railAllowed()) setSide('rail');
+      else { side.width = clamp(w, MIN_WIDE, MAX_WIDE); applySidebar(); sideSave(); }
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (sideMode() !== 'wide') { setSide('wide'); return; }
+      side.width = clamp(side.width + step, MIN_WIDE, MAX_WIDE);
+      applySidebar(); sideSave();
+    } else if (e.key === 'Home') { e.preventDefault(); setSide(railAllowed() ? 'rail' : 'hidden'); }
+    else if (e.key === 'End') { e.preventDefault(); side.width = MAX_WIDE; setSide('wide'); }
+    else return;
+    fitAfterResize();
+  });
+
+  /* the canvas is a different size now, so edges and handles must be redrawn */
+  const sb = document.getElementById('sidebar');
+  if (sb) sb.addEventListener('transitionend', e => {
+    if (e.propertyName === 'width') fitAfterResize();
+  });
+}
+function fitAfterResize() {
+  if (typeof editing !== 'undefined' && editing) return;
+  if (UI.view === 'map') { renderMap(); } 
+}
+
+/* ------------------------- swipe gestures -------------------------- */
+/* Swipe in from the left edge to open, swipe the panel away to close. */
+function wireSwipe() {
+  let track = null;
+  const EDGE = 26, THRESH = 55;
+
+  document.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse') return;
+    if (e.target.closest('#ctx, .side-resizer, input, textarea, [contenteditable="true"]')) return;
+    const onPanel = !!e.target.closest('#sidebar');
+    const fromEdge = e.clientX <= EDGE;
+    if (fromEdge && sideMode() !== 'wide') track = { x: e.clientX, y: e.clientY, kind: 'open' };
+    else if (onPanel && sideMode() === 'wide') track = { x: e.clientX, y: e.clientY, kind: 'close' };
+    else track = null;
+  }, true);
+
+  document.addEventListener('pointermove', e => {
+    if (!track) return;
+    const dx = e.clientX - track.x, dy = e.clientY - track.y;
+    if (Math.abs(dy) > Math.abs(dx)) { track = null; return; }   // a vertical scroll
+    if (track.kind === 'open' && dx > THRESH) {
+      setSide('wide'); fitAfterResize(); track = null;
+    } else if (track.kind === 'close' && dx < -THRESH) {
+      setSide(railAllowed() ? 'rail' : 'hidden'); fitAfterResize(); track = null;
+    }
+  }, true);
+
+  const drop = () => { track = null; };
+  document.addEventListener('pointerup', drop, true);
+  document.addEventListener('pointercancel', drop, true);
 }
 
 /* ------------------------------ persistence ------------------------ */
@@ -614,11 +841,9 @@ function render() {
   }
   const d = doc();
   $('#app').dataset.theme = themeMode();
-  $('#app').classList.toggle('side-hidden', !UI.sidebar);
+  applySidebar();
   $('#app').classList.toggle('insp-open', UI.inspector);
   $('#themeBtn').textContent = UI.theme === 'light' ? 'Light' : UI.theme === 'dark' ? 'Dark' : 'System';
-  const railSync = $('#railSync'), strip = $('#syncBtn');
-  if (railSync && strip) railSync.dataset.state = strip.dataset.state || 'off';
   if ($('#docTitle').textContent !== d.name) $('#docTitle').textContent = d.name;
   $('#layoutSel').value = d.layout;
   $$('.seg-btn').forEach(b => b.classList.toggle('is-on', b.dataset.view === UI.view));
@@ -629,7 +854,7 @@ function render() {
   $('#canvas').hidden = UI.view !== 'map';
   $('#zoombar').hidden = UI.view !== 'map';
   $('#outline').hidden = UI.view !== 'outline';
-  $('#scrim').hidden = !(window.innerWidth <= 900 && (UI.sidebar || UI.inspector));
+  syncScrim();
 
   renderDocList();
   if (UI.view === 'map') renderMap(); else renderOutline();
@@ -638,34 +863,109 @@ function render() {
 }
 
 /* --------------------------- documents list ------------------------ */
+/* Initials are the rail's only label, so they are derived the way a person
+   would read the name aloud: first letters of the first two words, or the
+   first two characters of a single word. Codepoint-safe for emoji names. */
+const SKIP_WORDS = new Set(['a', 'an', 'the', 'is', 'of', 'and', 'or', 'for', 'in', 'on', 'to', 'my', 'at', '&']);
+function docInitials(name) {
+  const raw = String(name || '').trim();
+  if (!raw) return '—';
+  const first = Array.from(raw)[0];
+  /* a name that opens with an emoji already has a better icon than any
+     pair of letters could be, so use it */
+  if (/\p{Extended_Pictographic}/u.test(first)) return first;
+
+  let words = raw.replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(Boolean);
+  if (!words.length) return Array.from(raw).slice(0, 2).join('');
+  /* "What is MindNote?" should read WM, not WI */
+  const strong = words.filter(w => !SKIP_WORDS.has(w.toLowerCase()));
+  if (strong.length) words = strong;
+  const chars = w => Array.from(w);
+  if (words.length === 1) return chars(words[0]).slice(0, 2).join('');
+  return chars(words[0])[0] + chars(words[1])[0];
+}
+
 function renderDocList() {
-  const ul = $('#docList'); ul.innerHTML = '';
+  const ul = $('#docList');
+  if (!ul) return;
+  ul.innerHTML = '';
+  const rail = sideMode() === 'rail';
+
   S.order.forEach(id => {
     const d = S.docs[id]; if (!d) return;
+    const colour = PALETTE[S.order.indexOf(id) % PALETTE.length];
+    const count = Object.keys(d.nodes).length;
+
     const li = document.createElement('li');
     li.className = 'doc-item' + (id === S.active ? ' is-active' : '');
-    li.innerHTML = `<span class="doc-dot" style="background:${PALETTE[S.order.indexOf(id) % PALETTE.length]}"></span>
-      <span class="doc-name"></span>
-      <span class="doc-count">${Object.keys(d.nodes).length}</span>
-      <button class="doc-kill" title="Delete document">✕</button>`;
-    li.querySelector('.doc-name').textContent = d.name;
+    li.style.setProperty('--dc', colour);
+    li.setAttribute('role', 'button');
+    li.tabIndex = 0;
+    /* The accessible name is the real name in both modes, so a screen
+       reader never has to interpret the initials. */
+    li.setAttribute('aria-label', `${d.name}, ${count} nodes`);
+    if (id === S.active) li.setAttribute('aria-current', 'true');
+
+    const chip = document.createElement('span');
+    chip.className = 'doc-chip';
+    chip.textContent = docInitials(d.name);
+    chip.setAttribute('aria-hidden', 'true');
+    li.appendChild(chip);
+
+    if (!rail) {
+      const nm = document.createElement('span');
+      nm.className = 'doc-name';
+      nm.textContent = d.name;
+      li.appendChild(nm);
+
+      const ct = document.createElement('span');
+      ct.className = 'doc-count';
+      ct.textContent = String(count);
+      li.appendChild(ct);
+
+      const kill = document.createElement('button');
+      kill.className = 'doc-kill';
+      kill.title = 'Delete document';
+      kill.setAttribute('aria-label', `Delete ${d.name}`);
+      kill.textContent = '✕';
+      kill.addEventListener('click', e => {
+        e.stopPropagation();
+        if (S.order.length === 1) return toast('Keep at least one document');
+        if (!confirm(`Delete "${d.name}"? This cannot be undone.`)) return;
+        deletedDocs[id] = Date.now();
+        delete S.docs[id];
+        S.order = S.order.filter(x => x !== id);
+        if (S.active === id) S.active = S.order[0];
+        save(); render();
+      });
+      li.appendChild(kill);
+    } else {
+      /* hover and long-press both reveal the full name */
+      li.addEventListener('pointerenter', e => {
+        if (e.pointerType === 'mouse') sideTip(li, d.name, `${count} nodes`);
+      });
+      li.addEventListener('pointerleave', hideSideTip);
+      li.addEventListener('pointerdown', e => {
+        if (e.pointerType === 'mouse') return;
+        clearTimeout(sideTipTimer);
+        sideTipTimer = setTimeout(() => sideTip(li, d.name, `${count} nodes`), 400);
+      });
+      li.addEventListener('pointerup', () => setTimeout(hideSideTip, 900));
+      li.addEventListener('pointercancel', hideSideTip);
+    }
+
+    const open = () => { hideSideTip(); openDoc(id); };
     li.addEventListener('click', e => {
       if (e.target.closest('.doc-kill')) return;
-      openDoc(id);
+      open();
     });
-    li.querySelector('.doc-kill').addEventListener('click', e => {
-      e.stopPropagation();
-      if (S.order.length === 1) return toast('Keep at least one document');
-      if (!confirm(`Delete "${d.name}"? This cannot be undone.`)) return;
-      deletedDocs[id] = Date.now();
-      delete S.docs[id];
-      S.order = S.order.filter(x => x !== id);
-      if (S.active === id) S.active = S.order[0];
-      save(); render();
+    li.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
     });
     ul.appendChild(li);
   });
 }
+
 function duplicateDoc(id) {
   const src = S.docs[id];
   if (!src) return;
@@ -683,7 +983,7 @@ function duplicateDoc(id) {
 
 function openDoc(id) {
   S.active = id; UI.selected = null; connectFrom = null;
-  if (window.innerWidth <= 900) UI.sidebar = false;
+  if (window.innerWidth <= 900 && sideMode() === 'wide') setSide('hidden', { quiet: true });
   const needsFit = !S.docs[id].cam;
   save(); render();
   if (needsFit) fitView();
@@ -1414,7 +1714,10 @@ function canvasSetup() {
     if (editing) return;                       // let the browser handle text fields
     e.preventDefault();
     lastCtxAt = Date.now();
-    const real = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+    /* elementFromPoint finds the node under a long-press even when the
+       event landed on an overlay; fall back if the host lacks it */
+    const real = (typeof document.elementFromPoint === 'function'
+      ? document.elementFromPoint(e.clientX, e.clientY) : null) || e.target;
     const checkTxt = real.closest('[data-txt]');
     const el = real.closest('.node');
     const at = { x: e.clientX, y: e.clientY };
@@ -1440,7 +1743,10 @@ function canvasSetup() {
     // setPointerCapture() on this canvas can retarget the derived dblclick
     // event to the canvas itself once a drag/pan gesture was armed for this
     // pointer; resolving by coordinate sidesteps that entirely.
-    const real = document.elementFromPoint(e.clientX, e.clientY) || e.target;
+    /* elementFromPoint finds the node under a long-press even when the
+       event landed on an overlay; fall back if the host lacks it */
+    const real = (typeof document.elementFromPoint === 'function'
+      ? document.elementFromPoint(e.clientX, e.clientY) : null) || e.target;
     const checkTxt = real.closest('[data-txt]');
     if (checkTxt) { editNode(checkTxt.dataset.txt); return; }
     const el = real.closest('.node');
@@ -1846,8 +2152,9 @@ function keySetup() {
     if (mod && e.key.toLowerCase() === 'c' && UI.selected) { e.preventDefault(); copyBranch(UI.selected); return; }
     if (mod && e.key.toLowerCase() === 'v' && UI.selected) { e.preventDefault(); pasteBranch(UI.selected); return; }
     if (mod && e.key.toLowerCase() === 'd' && UI.selected) { e.preventDefault(); duplicateNode(UI.selected); return; }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); $('#search').focus(); UI.sidebar = true; render(); return; }
-    if (e.key === '/') { e.preventDefault(); UI.sidebar = true; render(); $('#search').focus(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSide(); fitAfterResize(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); setSide('wide'); $('#search').focus(); return; }
+    if (e.key === '/') { e.preventDefault(); setSide('wide'); $('#search').focus(); return; }
     if (e.key === 'Escape') {
       if ($('#ctx')) { closeContextMenu(); return; }
       if ($('#linkPop')) { closeLinkPopover(); return; }
@@ -2424,7 +2731,7 @@ function runSearch(q) {
       S.active = h.did;
       UI.selected = h.id;
       ancestors(h.id).forEach(a => { S.docs[h.did].nodes[a].collapsed = false; });
-      if (window.innerWidth <= 900) UI.sidebar = false;
+      if (window.innerWidth <= 900 && sideMode() === 'wide') setSide('hidden', { quiet: true });
       save(); render(); centerOn(h.id);
     });
     box.appendChild(el);
@@ -2644,9 +2951,16 @@ function seed() {
    WIRING
    ===================================================================== */
 function wire() {
-  $('#openSidebar').addEventListener('click', () => { UI.sidebar = !UI.sidebar; save(); render(); });
-  $('#closeSidebar').addEventListener('click', () => { UI.sidebar = false; save(); render(); });
-  $('#scrim').addEventListener('click', () => { UI.sidebar = false; UI.inspector = false; save(); render(); });
+  /* the hamburger cycles the panel; the chevron and the scrim put it away */
+  $('#openSidebar').addEventListener('click', () => { toggleSide(); fitAfterResize(); });
+  $('#brandBtn').addEventListener('click', () => { toggleSide(); fitAfterResize(); });
+  $('#closeSidebar').addEventListener('click', () => {
+    setSide(railAllowed() ? 'rail' : 'hidden'); fitAfterResize();
+  });
+  $('#scrim').addEventListener('click', () => {
+    if (sideMode() === 'wide') setSide('hidden');
+    UI.inspector = false; save(); render();
+  });
   $('#inspectorBtn').addEventListener('click', () => { UI.inspector = !UI.inspector; save(); render(); });
   $('#closeInspector').addEventListener('click', () => { UI.inspector = false; save(); render(); });
 
@@ -2663,14 +2977,23 @@ function wire() {
   $('#undoBtn').addEventListener('click', undo);
   $('#redoBtn').addEventListener('click', redo);
 
-  /* the icon rail shown when the sidebar is collapsed on a wide screen */
-  $('#railOpen').addEventListener('click', () => { UI.sidebar = true; save(); render(); });
-  $('#railNew').addEventListener('click', newDocument);
+  /* rail-mode counterparts of the controls the wide panel shows as text */
   $('#railSearch').addEventListener('click', () => {
-    UI.sidebar = true; save(); render(); $('#search').focus();
+    setSide('wide'); fitAfterResize(); $('#search').focus();
   });
   $('#railTheme').addEventListener('click', () => cycleTheme());
-  $('#railSync').addEventListener('click', () => { const b = $('#syncBtn'); if (b) b.click(); });
+  $('#railData').addEventListener('click', openDataPanel);
+  $$('.rail-btn, #newDoc, .sync-strip').forEach(b => {
+    const label = b.dataset.tip;
+    if (!label) return;
+    b.addEventListener('pointerenter', e => {
+      if (e.pointerType === 'mouse') sideTip(b, label);
+    });
+    b.addEventListener('pointerleave', hideSideTip);
+  });
+
+  wireResizer();
+  wireSwipe();
 
   $('#docTitle').addEventListener('blur', () => {
     const t = $('#docTitle').textContent.trim() || 'Untitled';
@@ -2741,6 +3064,11 @@ function wire() {
 
   let rt = null;
   const onViewportChange = () => {
+    hideSideTip();
+    /* unfolding the Fold makes the rail viable again; the stored
+       preference is untouched, only what fits is recomputed */
+    applySidebar();
+    syncScrim();
     clearTimeout(rt);
     rt = setTimeout(() => {
       if (editing) keepEditVisible();
@@ -2845,7 +3173,9 @@ function boot() {
   }
   booted = true;
 
-  if (window.innerWidth <= 900) UI.sidebar = false;
+  sideLoad();
+  if (window.innerWidth <= 900 && side.mode === 'wide') side.mode = 'hidden';
+  applySidebar();
   UI.selected = null;
   pendingFit = !doc().cam;
 
