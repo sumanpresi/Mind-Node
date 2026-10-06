@@ -557,6 +557,48 @@ button{cursor:pointer;background:none;border:0}
 }
 .add-handle:hover::after{opacity:1}
 
+/* =====================================================================
+   SELECTION
+   A marked node is ringed rather than filled, so its own colour, shape and
+   task state stay readable while it is part of a set.
+   ===================================================================== */
+.node.is-marked{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent), var(--shadow-sm);
+}
+.node.is-marked.is-sel{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent),
+             0 0 0 7px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow);
+}
+/* nodes the band is currently over, before the button is released */
+.node.in-band{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+#marquee{
+  position:absolute;z-index:5;pointer-events:none;
+  border:1.5px dashed var(--accent);border-radius:4px;
+  background:color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+#selBar{
+  position:absolute;left:50%;transform:translateX(-50%);
+  top:calc(14px + var(--safe-t));z-index:8;
+  display:flex;align-items:center;gap:8px;
+  background:var(--ink);color:#fff;
+  padding:6px 8px 6px 14px;border-radius:999px;
+  box-shadow:0 8px 24px rgba(20,20,43,.3);
+  font-size:13px;font-weight:600;white-space:nowrap;
+}
+#selBar button{
+  color:#c9cce6;background:rgba(255,255,255,.1);
+  padding:5px 11px;border-radius:999px;font-size:12.5px;font-weight:600;
+}
+#selBar button:hover{background:rgba(255,255,255,.22);color:#fff}
+@media (max-width:620px){
+  #selBar{font-size:12.5px;padding:5px 6px 5px 12px;gap:6px}
+  #selBar button{padding:7px 12px}
+}
+
 #zoombar{
   position:absolute;right:14px;bottom:calc(14px + var(--safe-b));display:flex;gap:2px;
   background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:3px;box-shadow:var(--shadow-sm);
@@ -762,9 +804,135 @@ button{cursor:pointer;background:none;border:0}
   .n-fold{width:24px;height:24px;font-size:11px}
   .n-task{width:20px;height:20px;flex:0 0 20px}
   .add-handle{width:30px;height:30px;font-size:17px}
-  #zoombar{right:10px;bottom:10px;transition:bottom .18s ease}
-  #app:has(#sheet:not([hidden])) #zoombar{bottom:calc(62px + var(--safe-b))}
-  #app:has(#sheet.open) #zoombar{opacity:0;pointer-events:none}
+  /* =====================================================================
+   SELECTION
+   A marked node is ringed rather than filled, so its own colour, shape and
+   task state stay readable while it is part of a set.
+   ===================================================================== */
+.node.is-marked{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent), var(--shadow-sm);
+}
+.node.is-marked.is-sel{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent),
+             0 0 0 7px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow);
+}
+/* nodes the band is currently over, before the button is released */
+.node.in-band{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+#marquee{
+  position:absolute;z-index:5;pointer-events:none;
+  border:1.5px dashed var(--accent);border-radius:4px;
+  background:color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+#selBar{
+  position:absolute;left:50%;transform:translateX(-50%);
+  top:calc(14px + var(--safe-t));z-index:8;
+  display:flex;align-items:center;gap:8px;
+  background:var(--ink);color:#fff;
+  padding:6px 8px 6px 14px;border-radius:999px;
+  box-shadow:0 8px 24px rgba(20,20,43,.3);
+  font-size:13px;font-weight:600;white-space:nowrap;
+}
+#selBar button{
+  color:#c9cce6;background:rgba(255,255,255,.1);
+  padding:5px 11px;border-radius:999px;font-size:12.5px;font-weight:600;
+}
+#selBar button:hover{background:rgba(255,255,255,.22);color:#fff}
+@media (max-width:620px){
+  #selBar{font-size:12.5px;padding:5px 6px 5px 12px;gap:6px}
+  #selBar button{padding:7px 12px}
+}
+
+#zoombar{right:10px;bottom:10px;transition:bottom .18s ease}
+  #app:has(#sheet:not([hidden])) /* =====================================================================
+   SELECTION
+   A marked node is ringed rather than filled, so its own colour, shape and
+   task state stay readable while it is part of a set.
+   ===================================================================== */
+.node.is-marked{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent), var(--shadow-sm);
+}
+.node.is-marked.is-sel{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent),
+             0 0 0 7px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow);
+}
+/* nodes the band is currently over, before the button is released */
+.node.in-band{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+#marquee{
+  position:absolute;z-index:5;pointer-events:none;
+  border:1.5px dashed var(--accent);border-radius:4px;
+  background:color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+#selBar{
+  position:absolute;left:50%;transform:translateX(-50%);
+  top:calc(14px + var(--safe-t));z-index:8;
+  display:flex;align-items:center;gap:8px;
+  background:var(--ink);color:#fff;
+  padding:6px 8px 6px 14px;border-radius:999px;
+  box-shadow:0 8px 24px rgba(20,20,43,.3);
+  font-size:13px;font-weight:600;white-space:nowrap;
+}
+#selBar button{
+  color:#c9cce6;background:rgba(255,255,255,.1);
+  padding:5px 11px;border-radius:999px;font-size:12.5px;font-weight:600;
+}
+#selBar button:hover{background:rgba(255,255,255,.22);color:#fff}
+@media (max-width:620px){
+  #selBar{font-size:12.5px;padding:5px 6px 5px 12px;gap:6px}
+  #selBar button{padding:7px 12px}
+}
+
+#zoombar{bottom:calc(62px + var(--safe-b))}
+  #app:has(#sheet.open) /* =====================================================================
+   SELECTION
+   A marked node is ringed rather than filled, so its own colour, shape and
+   task state stay readable while it is part of a set.
+   ===================================================================== */
+.node.is-marked{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent), var(--shadow-sm);
+}
+.node.is-marked.is-sel{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent),
+             0 0 0 7px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow);
+}
+/* nodes the band is currently over, before the button is released */
+.node.in-band{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+#marquee{
+  position:absolute;z-index:5;pointer-events:none;
+  border:1.5px dashed var(--accent);border-radius:4px;
+  background:color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+#selBar{
+  position:absolute;left:50%;transform:translateX(-50%);
+  top:calc(14px + var(--safe-t));z-index:8;
+  display:flex;align-items:center;gap:8px;
+  background:var(--ink);color:#fff;
+  padding:6px 8px 6px 14px;border-radius:999px;
+  box-shadow:0 8px 24px rgba(20,20,43,.3);
+  font-size:13px;font-weight:600;white-space:nowrap;
+}
+#selBar button{
+  color:#c9cce6;background:rgba(255,255,255,.1);
+  padding:5px 11px;border-radius:999px;font-size:12.5px;font-weight:600;
+}
+#selBar button:hover{background:rgba(255,255,255,.22);color:#fff}
+@media (max-width:620px){
+  #selBar{font-size:12.5px;padding:5px 6px 5px 12px;gap:6px}
+  #selBar button{padding:7px 12px}
+}
+
+#zoombar{opacity:0;pointer-events:none}
   .tab-btn{width:44px;height:44px}
   .sheet-foot button{height:46px}
   .zb{width:34px;height:34px}
@@ -788,7 +956,49 @@ button{cursor:pointer;background:none;border:0}
   #sheet{max-height:78dvh}
   .icon-btn{width:30px;height:30px}
   .doc-title{max-width:90px}
-  #zoombar{padding:2px}
+  /* =====================================================================
+   SELECTION
+   A marked node is ringed rather than filled, so its own colour, shape and
+   task state stay readable while it is part of a set.
+   ===================================================================== */
+.node.is-marked{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent), var(--shadow-sm);
+}
+.node.is-marked.is-sel{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent),
+             0 0 0 7px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow);
+}
+/* nodes the band is currently over, before the button is released */
+.node.in-band{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+#marquee{
+  position:absolute;z-index:5;pointer-events:none;
+  border:1.5px dashed var(--accent);border-radius:4px;
+  background:color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+#selBar{
+  position:absolute;left:50%;transform:translateX(-50%);
+  top:calc(14px + var(--safe-t));z-index:8;
+  display:flex;align-items:center;gap:8px;
+  background:var(--ink);color:#fff;
+  padding:6px 8px 6px 14px;border-radius:999px;
+  box-shadow:0 8px 24px rgba(20,20,43,.3);
+  font-size:13px;font-weight:600;white-space:nowrap;
+}
+#selBar button{
+  color:#c9cce6;background:rgba(255,255,255,.1);
+  padding:5px 11px;border-radius:999px;font-size:12.5px;font-weight:600;
+}
+#selBar button:hover{background:rgba(255,255,255,.22);color:#fff}
+@media (max-width:620px){
+  #selBar{font-size:12.5px;padding:5px 6px 5px 12px;gap:6px}
+  #selBar button{padding:7px 12px}
+}
+
+#zoombar{padding:2px}
   .zb{width:28px;height:28px}
 }
 
@@ -797,7 +1007,49 @@ button{cursor:pointer;background:none;border:0}
 }
 
 @media print{
-  #sidebar,#topbar,#inspector,#sheet,#zoombar{display:none !important}
+  #sidebar,#topbar,#inspector,#sheet,/* =====================================================================
+   SELECTION
+   A marked node is ringed rather than filled, so its own colour, shape and
+   task state stay readable while it is part of a set.
+   ===================================================================== */
+.node.is-marked{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent), var(--shadow-sm);
+}
+.node.is-marked.is-sel{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px var(--accent),
+             0 0 0 7px color-mix(in srgb, var(--accent) 28%, transparent), var(--shadow);
+}
+/* nodes the band is currently over, before the button is released */
+.node.in-band{
+  box-shadow:0 0 0 2px var(--paper), 0 0 0 4.5px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+#marquee{
+  position:absolute;z-index:5;pointer-events:none;
+  border:1.5px dashed var(--accent);border-radius:4px;
+  background:color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+#selBar{
+  position:absolute;left:50%;transform:translateX(-50%);
+  top:calc(14px + var(--safe-t));z-index:8;
+  display:flex;align-items:center;gap:8px;
+  background:var(--ink);color:#fff;
+  padding:6px 8px 6px 14px;border-radius:999px;
+  box-shadow:0 8px 24px rgba(20,20,43,.3);
+  font-size:13px;font-weight:600;white-space:nowrap;
+}
+#selBar button{
+  color:#c9cce6;background:rgba(255,255,255,.1);
+  padding:5px 11px;border-radius:999px;font-size:12.5px;font-weight:600;
+}
+#selBar button:hover{background:rgba(255,255,255,.22);color:#fff}
+@media (max-width:620px){
+  #selBar{font-size:12.5px;padding:5px 6px 5px 12px;gap:6px}
+  #selBar button{padding:7px 12px}
+}
+
+#zoombar{display:none !important}
   #app{height:auto}
   #canvas{overflow:visible;background:#fff}
 }

@@ -708,16 +708,15 @@ function copyBranch(id, quiet) {
   const d = doc(), ids = [id, ...descendants(id)];
   const nodes = {};
   ids.forEach(x => { nodes[x] = JSON.parse(JSON.stringify(d.nodes[x])); });
-  clipboard = { root: id, nodes };
+  clipboard = { root: id, roots: [id], nodes };
   if (!quiet) toast(ids.length > 1 ? `Copied ${ids.length} nodes` : 'Copied');
 }
-function pasteBranch(intoId, plain) {
-  if (!clipboard) return toast('Nothing copied yet');
-  if (!N(intoId)) return;
-  pushUndo();
+/* One branch out of the clipboard and into intoId. Shared by paste and by
+   duplicate, and called once per branch when several were copied. */
+function pasteOne(oldId, intoId, plain) {
   const d = doc();
-  const clone = (oldId, parent) => {
-    const src = clipboard.nodes[oldId];
+  const clone = (srcId, parent) => {
+    const src = clipboard.nodes[srcId];
     if (!src) return null;
     const n = JSON.parse(JSON.stringify(src));
     n.id = uid(); n.parent = parent; n.children = []; n.x = null; n.y = null;
@@ -729,11 +728,22 @@ function pasteBranch(intoId, plain) {
     (src.children || []).forEach(c => { const k = clone(c, n.id); if (k) n.children.push(k.id); });
     return n;
   };
-  const top = clone(clipboard.root, intoId);
-  if (!top) return;
+  const top = clone(oldId, intoId);
+  if (!top) return null;
   N(intoId).children.push(top.id);
   N(intoId).collapsed = false;
-  UI.selected = top.id;
+  return top;
+}
+
+function pasteBranch(intoId, plain) {
+  if (!clipboard) return toast('Nothing copied yet');
+  if (!N(intoId)) return;
+  pushUndo();
+  const roots = clipboard.roots && clipboard.roots.length ? clipboard.roots : [clipboard.root];
+  const made = [];
+  roots.forEach(r => { const t = pasteOne(r, intoId, plain); if (t) made.push(t.id); });
+  if (!made.length) return;
+  if (made.length > 1) setMarked(made); else { clearMarked(); UI.selected = made[0]; }
   save(); render();
 }
 /* A main node stands on its own, beside the central idea rather than under
@@ -850,7 +860,10 @@ function render() {
   $$('.tool[data-toggle]').forEach(b => b.classList.toggle('is-on', !!UI[b.dataset.toggle]));
   $$('.act').forEach(b => { b.disabled = !UI.selected; });
   $('#connectBtn').classList.toggle('is-on', !!connectFrom);
-  $('#connectHint').hidden = !connectFrom;
+  $('#connectHint').hidden = !connectFrom && !moveInto;
+  if (moveInto) $('#connectHint').textContent = `Tap the node these ${marked.size || 1} should sit under.`;
+  else if (connectFrom) $('#connectHint').textContent = 'Pick the first node, then the second.';
+  syncSelBar();
   $('#canvas').hidden = UI.view !== 'map';
   $('#zoombar').hidden = UI.view !== 'map';
   $('#outline').hidden = UI.view !== 'outline';
@@ -982,7 +995,7 @@ function duplicateDoc(id) {
 }
 
 function openDoc(id) {
-  S.active = id; UI.selected = null; connectFrom = null;
+  S.active = id; UI.selected = null; connectFrom = null; clearMarked();
   if (window.innerWidth <= 900 && sideMode() === 'wide') setSide('hidden', { quiet: true });
   const needsFit = !S.docs[id].cam;
   save(); render();
@@ -1133,7 +1146,8 @@ function buildNodeEl(id) {
   const el = document.createElement('div');
   el.className = `node sh-${n.shape}` + (id === d.root ? ' is-root' : '') +
     (!n.parent && id !== d.root ? ' is-float' : '') +
-    (id === UI.selected ? ' is-sel' : '');
+    (id === UI.selected ? ' is-sel' : '') +
+    (marked.has(id) ? ' is-marked' : '');
   el.dataset.id = id;
   el.style.setProperty('--nc', c);
   if (n.shape !== 'line' && n.shape !== 'embedded') el.style.borderWidth = n.border + 'px';
@@ -1550,9 +1564,12 @@ function fitView() {
 const pointers = new Map();
 let pan = null, nodeDrag = null, pinch = null;
 let lpTimer = null, lpStart = null, lastCtxAt = 0;
+let pendingCtx = null;   // a right-click waiting to see whether it becomes a drag
 
 function cancelGestures() {
   clearTimeout(lpTimer); lpTimer = null; lpStart = null;
+  if (band) { band = null; hideBand(); clearPreview(); }
+  pendingCtx = null;
   pan = null; pinch = null; pointers.clear();
   if (nodeDrag) { nodeDrag = null; dragOffset = null; render(); }
 }
@@ -1576,6 +1593,22 @@ function canvasSetup() {
     /* While a node is being typed into, the canvas stays put. The browser
        still blurs the field, which commits the text. */
     if (editing) return;
+
+    /* Right button: this is either a context menu or the start of a
+       selection band. Which one it is only becomes clear on release, so
+       hold the menu back until then. */
+    if (e.pointerType === 'mouse' && e.button === 2) {
+      const over = e.target.closest('.node');
+      band = {
+        sx: e.clientX, sy: e.clientY, cx: e.clientX, cy: e.clientY, moved: false,
+        additive: e.shiftKey || e.ctrlKey || e.metaKey,
+        onNode: over ? over.dataset.id : null
+      };
+      canvas.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
 
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
@@ -1602,22 +1635,47 @@ function canvasSetup() {
         if (Date.now() - lastCtxAt < 700) return;   // the browser already offered one
         const target = checkRowTxt ? checkRowTxt.dataset.txt : (nodeEl ? nodeEl.dataset.id : null);
         const at = lpStart;
-        cancelGestures();
         if (navigator.vibrate) { try { navigator.vibrate(12); } catch (err) { } }
-        openContextMenu(at.x, at.y, target);
+
+        if (target) { cancelGestures(); openContextMenu(at.x, at.y, target); return; }
+
+        /* Held on empty canvas: arm a selection band. Drag from here to
+           sweep up nodes; lift without moving and the canvas menu opens,
+           which is what a plain hold has always done. */
+        pan = null; nodeDrag = null;
+        band = { sx: at.x, sy: at.y, cx: at.x, cy: at.y, moved: false, additive: false, onNode: null, touch: true };
+        pendingCtx = { x: at.x, y: at.y, id: null };
+        teachOnce('band', 'Drag to select, or lift for the menu');
       }, 520);
     }
     if (checkRow) {
       // no drag, no pan — just wait to see if this becomes a long-press or a plain tap
     } else if (nodeEl && !editing) {
       const id = nodeEl.dataset.id;
-      nodeDrag = { id, sx: e.clientX, sy: e.clientY, moved: false, ids: new Set([id, ...descendants(id)]) };
+      const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+      /* dragging any member of a selection carries the whole selection */
+      const heads = (!additive && marked.has(id) && marked.size > 1) ? topLevel(selIds()) : [id];
+      const ids = new Set();
+      heads.forEach(h => { ids.add(h); descendants(h).forEach(x => ids.add(x)); });
+      nodeDrag = { id, heads, additive, sx: e.clientX, sy: e.clientY, moved: false, ids };
     } else {
       pan = { sx: e.clientX, sy: e.clientY, cx: cam().x, cy: cam().y, moved: false };
     }
   });
 
   canvas.addEventListener('pointermove', e => {
+    if (band) {
+      band.cx = e.clientX; band.cy = e.clientY;
+      if (!band.moved && Math.hypot(e.clientX - band.sx, e.clientY - band.sy) > 6) {
+        band.moved = true;
+        pendingCtx = null;              // it turned into a drag, so no menu
+      }
+      if (band.moved) {
+        showBand(band.sx, band.sy, band.cx, band.cy);
+        previewBand(nodesInBand(band.sx, band.sy, band.cx, band.cy));
+      }
+      return;
+    }
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (lpTimer && lpStart && Math.hypot(e.clientX - lpStart.x, e.clientY - lpStart.y) > 8) {
       clearTimeout(lpTimer); lpTimer = null;
@@ -1662,32 +1720,59 @@ function canvasSetup() {
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
 
+    if (band) {
+      const b = band; band = null;
+      hideBand();
+      if (b.moved) { commitBand(b, b.additive); }
+      else if (pendingCtx) {
+        const pc = pendingCtx; pendingCtx = null;
+        openContextMenu(pc.x, pc.y, pc.id != null ? pc.id : b.onNode);
+      }
+      return;
+    }
+
     if (nodeDrag) {
       const nd = nodeDrag; nodeDrag = null; dragOffset = null;
       if (!nd.moved) {
-        handleNodeTap(nd.id);
+        handleNodeTap(nd.id, nd.additive);
       } else if (nd.target) {
-        pushUndo(); reparent(nd.id, nd.target); save(); render();
+        /* dropped onto a node: every head of the drag moves under it */
+        pushUndo();
+        const heads = (nd.heads || [nd.id]).filter(h => h !== nd.target && !descendants(h).includes(nd.target));
+        heads.forEach(h => reparent(h, nd.target));
+        save(); render();
+        if (heads.length > 1) toast(`${heads.length} branches moved`);
       } else {
         pushUndo();
-        const d = doc(), node = d.nodes[nd.id];
+        const d = doc();
         const s = cam().s;
         const dx = (e.clientX - nd.sx) / s, dy = (e.clientY - nd.sy) / s;
+        const heads = nd.heads || [nd.id];
+        let detached = 0;
 
-        if (d.layout === 'manual') {
-          nd.ids.forEach(id => { d.nodes[id].x += dx; d.nodes[id].y += dy; });
-        } else if (node && node.parent) {
-          /* pulled clear of everything: it becomes a main node of its own */
-          const p = N(node.parent);
-          p.children = p.children.filter(c => c !== nd.id);
-          node.parent = null;
-          node.x = P[nd.id].x + dx; node.y = P[nd.id].y + dy;
-          toast('Detached — drop it on a node to attach it again');
-        } else if (node) {
-          node.x = (node.x || P[nd.id].x) + dx;
-          node.y = (node.y || P[nd.id].y) + dy;
-        }
+        heads.forEach(hid => {
+          const node = d.nodes[hid];
+          if (!node) return;
+          if (d.layout === 'manual') {
+            [hid, ...descendants(hid)].forEach(id => {
+              if (d.nodes[id]) { d.nodes[id].x += dx; d.nodes[id].y += dy; }
+            });
+          } else if (node.parent) {
+            /* pulled clear of everything: it becomes a main node of its own */
+            const p = N(node.parent);
+            if (p) p.children = p.children.filter(c => c !== hid);
+            node.parent = null;
+            node.x = (P[hid] ? P[hid].x : 0) + dx;
+            node.y = (P[hid] ? P[hid].y : 0) + dy;
+            detached++;
+          } else {
+            node.x = (node.x == null ? (P[hid] ? P[hid].x : 0) : node.x) + dx;
+            node.y = (node.y == null ? (P[hid] ? P[hid].y : 0) : node.y) + dy;
+          }
+        });
         save(); render();
+        if (detached === 1) toast('Detached — drop it on a node to attach it again');
+        else if (detached > 1) toast(`${detached} branches detached`);
       }
       return;
     }
@@ -1695,7 +1780,9 @@ function canvasSetup() {
       const moved = pan.moved; pan = null;
       save();
       if (!moved && !editing) {
+        if (moveInto) { moveInto = false; render(); return; }
         if (connectFrom) { connectFrom = null; render(); return; }
+        if (marked.size) { clearMarked(); UI.selected = null; render(); return; }
         if (UI.selected) { UI.selected = null; render(); }
       }
     }
@@ -1714,6 +1801,15 @@ function canvasSetup() {
     if (editing) return;                       // let the browser handle text fields
     e.preventDefault();
     lastCtxAt = Date.now();
+
+    /* Browsers disagree about whether this fires on press or on release.
+       If a band is armed, remember the request and decide on release:
+       a plain right-click opens the menu, a right-drag selects instead. */
+    if (band) {
+      const el0 = e.target.closest('.node');
+      pendingCtx = { x: e.clientX, y: e.clientY, id: el0 ? el0.dataset.id : null };
+      return;
+    }
     /* elementFromPoint finds the node under a long-press even when the
        event landed on an overlay; fall back if the host lacks it */
     const real = (typeof document.elementFromPoint === 'function'
@@ -1841,7 +1937,16 @@ function reparent(id, newParent) {
   N(newParent).collapsed = false;
 }
 
-function handleNodeTap(id) {
+function handleNodeTap(id, additive) {
+  if (moveInto) { moveSelectionInto(id); return; }
+  if (additive) {                    // shift or ctrl click adds and removes
+    /* a modifier click is not half of a double tap: clear the candidate,
+       or the next plain click on the same node opens the editor */
+    lastTap = { id: null, t: 0 };
+    toggleMark(id);
+    render();
+    return;
+  }
   if (connectFrom) {
     if (connectFrom !== id) {
       pushUndo();
@@ -1853,6 +1958,9 @@ function handleNodeTap(id) {
   const now = Date.now();
   if (lastTap.id === id && now - lastTap.t < 380) { lastTap = { id: null, t: 0 }; editNode(id); return; }
   lastTap = { id, t: now };
+  /* tapping a node that is part of a wider selection keeps that selection,
+     so you can pick one up and drag the whole set */
+  if (!marked.has(id)) clearMarked();
   UI.selected = id;
   render();
 }
@@ -1860,6 +1968,12 @@ function handleNodeTap(id) {
 /* =====================================================================
    Context menu — right click on a desktop, long press on a touch screen.
    ===================================================================== */
+function placeContextMenu(menu, x, y) {
+  const r = menu.getBoundingClientRect(), pad = 8;
+  menu.style.left = Math.max(pad, Math.min(x, window.innerWidth - r.width - pad)) + 'px';
+  menu.style.top = Math.max(pad, Math.min(y, window.innerHeight - r.height - pad)) + 'px';
+}
+
 function closeContextMenu() {
   const m = $('#ctx');
   if (m) m.remove();
@@ -1891,8 +2005,48 @@ function openContextMenu(x, y, id) {
   };
   const sep = () => { const s2 = document.createElement('div'); s2.className = 'ctx-sep'; menu.appendChild(s2); };
 
+  /* Several nodes held: offer what makes sense for a set, not for one. */
+  if (marked.size > 1 && (!id || marked.has(id))) {
+    const ids = selIds(), heads = topLevel(ids);
+    const head = document.createElement('div');
+    head.className = 'ctx-head';
+    head.textContent = `${ids.length} nodes selected`;
+    menu.appendChild(head);
+
+    item('Move into…', () => armMoveInto());
+    item('Detach from parents', () => detachSelection());
+    item('Fold branches', () => foldSelection(true));
+    item('Unfold branches', () => foldSelection(false));
+    item('Mark as done', () => markSelectionDone(true));
+    item('Clear task marks', () => markSelectionDone(false));
+    sep();
+    item('Colour and shape…', () => {
+      if (window.innerWidth > 900) { UI.inspector = true; UI.inspTab = 'style'; }
+      else UI.sheetTab = 'style';
+      save(); render();
+    });
+    item('Sort each branch A–Z', () => {
+      pushUndo();
+      ids.forEach(x => { const nn = N(x); if (nn && nn.children.length > 1) nn.children.sort((a, b) => (N(a).text || '').localeCompare(N(b).text || '', undefined, { sensitivity: 'base' })); });
+      save(); render();
+    });
+    sep();
+    item('Copy', () => copySelection(), { hint: 'Ctrl C' });
+    item('Duplicate', () => duplicateSelection(), { hint: 'Ctrl D' });
+    item('Select all', () => { markAll(); render(); }, { hint: 'Ctrl A' });
+    item('Clear selection', () => { clearMarked(); render(); }, { hint: 'Esc' });
+    sep();
+    item(`Delete ${heads.length === 1 ? 'branch' : heads.length + ' branches'}`,
+         () => deleteSelection(), { danger: true, hint: 'Del' });
+
+    document.body.appendChild(menu);
+    placeContextMenu(menu, x, y);
+    return;
+  }
+
   if (id && N(id)) {
     const n = N(id), isRoot = id === d.root, st = taskState(id);
+    if (!marked.has(id)) clearMarked();
     UI.selected = id;
     const head = document.createElement('div');
     head.className = 'ctx-head';
@@ -1916,6 +2070,10 @@ function openContextMenu(x, y, id) {
       }, { skip: isRoot });
     item('Create connection', () => doAct('connect'));
     item('Sort children A–Z', () => sortChildren(id), { skip: n.children.length < 2 });
+    sep();
+    item('Select this branch', () => { markBranch(id); render(); }, { skip: !n.children.length });
+    item('Select siblings', () => { markSiblings(id); render(); });
+    item('Select all', () => { markAll(); render(); }, { hint: 'Ctrl A' });
     item('Detach from parent', () => detachNode(id), { skip: isRoot || !n.parent });
     item('Attach to central idea', () => attachToRoot(id), { skip: isRoot || !!n.parent });
     sep();
@@ -1937,6 +2095,8 @@ function openContextMenu(x, y, id) {
     item('Paste', () => pasteBranch(d.root, true), { disabled: !clipboard });
     item('Paste and keep style', () => pasteBranch(d.root, false), { disabled: !clipboard });
     sep();
+    item('Select all', () => { markAll(); render(); }, { hint: 'Ctrl A' });
+    sep();
     item('Zoom in', () => zoomBy(1.15));
     item('Zoom out', () => zoomBy(0.87));
     item('Zoom to fit', () => fitView());
@@ -1948,12 +2108,7 @@ function openContextMenu(x, y, id) {
   }
 
   document.body.appendChild(menu);
-  const r = menu.getBoundingClientRect();
-  const pad = 8;
-  const left = Math.max(pad, Math.min(x, window.innerWidth - r.width - pad));
-  const top = Math.max(pad, Math.min(y, window.innerHeight - r.height - pad));
-  menu.style.left = left + 'px';
-  menu.style.top = top + 'px';
+  placeContextMenu(menu, x, y);
   if (id) render();
 }
 
@@ -2026,6 +2181,247 @@ function openLinkPopover(id, x, y, forceEdit) {
     box.querySelector('.lp-open').addEventListener('click', () => { const u = n.url; closeLinkPopover(); openUrl(u); });
     box.querySelector('.lp-edit').addEventListener('click', () => openLinkPopover(id, x, y, true));
   }
+}
+
+/* A count with a way out. Without it a selection made by sweeping is easy
+   to forget about, and on a touch screen there is no Escape key. */
+function syncSelBar() {
+  const bar = $('#selBar');
+  if (!bar) return;
+  const n = marked.size;
+  bar.hidden = !(n > 1 && UI.view === 'map');
+  if (n > 1) $('#selCount').textContent = `${n} nodes selected`;
+}
+
+/* Worth saying the first few times, tiresome every time after that. */
+function teachOnce(key, message, times) {
+  const k = 'mindnote.taught.' + key;
+  let n = 0;
+  try { n = parseInt(localStorage.getItem(k) || '0', 10) || 0; } catch (e) { return; }
+  if (n >= (times || 3)) return;
+  try { localStorage.setItem(k, String(n + 1)); } catch (e) { }
+  toast(message);
+}
+
+/* ------------------------------ marquee ---------------------------- */
+/* A rubber band drawn over the canvas. Held in client coordinates while
+   it is on screen and converted to world coordinates to decide what it
+   caught, so it stays correct at any pan or zoom. */
+let band = null, bandEl = null;
+
+function showBand(x0, y0, x1, y1) {
+  const canvas = $('#canvas');
+  if (!bandEl) {
+    bandEl = document.createElement('div');
+    bandEl.id = 'marquee';
+    canvas.appendChild(bandEl);
+  }
+  const r = canvas.getBoundingClientRect();
+  const l = Math.min(x0, x1) - r.left, t = Math.min(y0, y1) - r.top;
+  bandEl.style.left = l + 'px';
+  bandEl.style.top = t + 'px';
+  bandEl.style.width = Math.abs(x1 - x0) + 'px';
+  bandEl.style.height = Math.abs(y1 - y0) + 'px';
+  bandEl.hidden = false;
+}
+function hideBand() { if (bandEl) bandEl.hidden = true; }
+
+function nodesInBand(x0, y0, x1, y1) {
+  const a = toWorld(Math.min(x0, x1), Math.min(y0, y1));
+  const b = toWorld(Math.max(x0, x1), Math.max(y0, y1));
+  const hit = [];
+  Object.keys(P).forEach(id => {
+    const p = P[id];
+    /* any overlap counts, so you do not have to lasso a node exactly */
+    if (p.x < b.x && p.x + p.w > a.x && p.y < b.y && p.y + p.h > a.y) hit.push(id);
+  });
+  return hit;
+}
+
+/* live preview while the band is being dragged */
+function previewBand(ids) {
+  const want = new Set(ids);
+  $$('#nodes .node').forEach(el => el.classList.toggle('in-band', want.has(el.dataset.id)));
+}
+function clearPreview() { $$('#nodes .node.in-band').forEach(el => el.classList.remove('in-band')); }
+
+/* the rect is passed in: by the time this runs the live band is gone */
+function commitBand(b, additive) {
+  const ids = nodesInBand(b.sx, b.sy, b.cx, b.cy);
+  clearPreview();
+  if (additive) {
+    const merged = new Set([...selIds(), ...ids]);
+    setMarked([...merged]);
+  } else {
+    setMarked(ids);
+  }
+  if (!ids.length && !additive) { clearMarked(); UI.selected = null; }
+  render();
+}
+
+/* =====================================================================
+   MULTI-SELECTION
+
+   UI.selected stays the anchor — the one node that "add child" or "rename"
+   act on. `marked` holds a wider selection on top of it. While marked
+   holds nothing or one node, every existing behaviour is unchanged.
+
+   Reached by: right-button drag on the canvas, press-and-hold then drag on
+   a touch screen, shift or ctrl clicking nodes, Ctrl+A, or "Select branch"
+   in the context menu.
+   ===================================================================== */
+let marked = new Set();
+let moveInto = false;    // armed: the next node tapped becomes the new parent
+
+function selIds() {
+  if (marked.size) return [...marked].filter(id => N(id));
+  return (UI.selected && N(UI.selected)) ? [UI.selected] : [];
+}
+const multi = () => marked.size > 1;
+
+/* Deleting, moving or copying a parent already carries its children, so
+   those operations work on the heads of the selection rather than every
+   node in it — otherwise a branch would be processed twice. */
+function topLevel(ids) {
+  const set = new Set(ids);
+  return ids.filter(id => !ancestors(id).some(a => set.has(a)));
+}
+
+function setMarked(ids) {
+  marked = new Set(ids.filter(id => N(id)));
+  if (marked.size && (!UI.selected || !marked.has(UI.selected))) UI.selected = [...marked][0];
+}
+function clearMarked() {
+  if (!marked.size) return false;
+  marked.clear();
+  return true;
+}
+function toggleMark(id) {
+  if (!N(id)) return;
+  if (!marked.size && UI.selected && UI.selected !== id) marked.add(UI.selected);
+  if (marked.has(id)) {
+    marked.delete(id);
+    if (UI.selected === id) UI.selected = marked.size ? [...marked][0] : null;
+  } else {
+    marked.add(id);
+    UI.selected = id;
+  }
+  if (marked.size === 1) { UI.selected = [...marked][0]; marked.clear(); }
+}
+function markBranch(id) {
+  if (!N(id)) return;
+  setMarked([id, ...descendants(id)]);
+}
+function markAll() {
+  const ids = [];
+  rootsOf().forEach(function walk(x) { ids.push(x); kidsOf(N(x)).forEach(walk); });
+  setMarked(ids);
+}
+function markSiblings(id) {
+  const n = N(id);
+  if (!n) return;
+  if (!n.parent) return setMarked(rootsOf());
+  setMarked(kidsOf(N(n.parent)));
+}
+
+/* ------------------------- acting on a selection ------------------- */
+/* Dragging a dozen nodes across a large map is awkward, especially with a
+   finger. Arming a move instead lets you pick the destination calmly. */
+function armMoveInto() {
+  if (!selIds().length) return;
+  moveInto = true;
+  connectFrom = null;
+  render();
+}
+function moveSelectionInto(targetId) {
+  moveInto = false;
+  if (!N(targetId)) { render(); return; }
+  const heads = topLevel(selIds())
+    .filter(h => h !== targetId && h !== doc().root && !descendants(h).includes(targetId));
+  if (!heads.length) { toast('Pick a node outside the selection'); render(); return; }
+  pushUndo();
+  heads.forEach(h => reparent(h, targetId));
+  save(); render();
+  toast(heads.length > 1 ? `${heads.length} branches moved` : 'Moved');
+}
+
+function deleteSelection() {
+  const heads = topLevel(selIds()).filter(id => id !== doc().root);
+  if (!heads.length) return toast('The central idea stays');
+  pushUndo();
+  const fallback = N(heads[0]).parent;
+  heads.forEach(removeNode);
+  clearMarked();
+  UI.selected = (fallback && N(fallback)) ? fallback : null;
+  save(); render();
+  toast(heads.length > 1 ? `Deleted ${heads.length} branches` : 'Deleted');
+}
+
+function detachSelection() {
+  const heads = topLevel(selIds()).filter(id => id !== doc().root && N(id).parent);
+  if (!heads.length) return toast('Nothing here has a parent to leave');
+  pushUndo();
+  heads.forEach(id => {
+    const n = N(id), p = N(n.parent);
+    if (p) p.children = p.children.filter(c => c !== id);
+    n.parent = null;
+    const pos = P[id] || { x: 0, y: 0 };
+    n.x = pos.x; n.y = pos.y;
+  });
+  save(); render();
+  toast(heads.length > 1 ? `${heads.length} branches detached` : 'Detached — drag it onto a node to attach it again');
+}
+
+/* styling applies to every node in the selection, not just the heads */
+function styleSelection(apply) {
+  const ids = selIds();
+  if (!ids.length) return;
+  pushUndo();
+  ids.forEach(id => { const n = N(id); if (n) apply(n, id); });
+  save(); render();
+}
+
+function foldSelection(collapse) {
+  const ids = selIds().filter(id => N(id) && N(id).children.length);
+  if (!ids.length) return toast('Nothing here has children to fold');
+  pushUndo();
+  ids.forEach(id => { N(id).collapsed = collapse; });
+  save(); render();
+}
+
+function copySelection() {
+  const heads = topLevel(selIds());
+  if (!heads.length) return;
+  const d = doc(), nodes = {};
+  heads.forEach(h => [h, ...descendants(h)].forEach(x => { nodes[x] = JSON.parse(JSON.stringify(d.nodes[x])); }));
+  clipboard = { roots: heads.slice(), root: heads[0], nodes };
+  toast(heads.length > 1 ? `Copied ${heads.length} branches` : 'Copied');
+}
+
+function duplicateSelection() {
+  const heads = topLevel(selIds()).filter(id => N(id).parent);
+  if (!heads.length) return toast('The central idea cannot be duplicated');
+  copySelection();
+  pushUndo();
+  const made = [];
+  heads.forEach(h => {
+    const into = N(h).parent;
+    const before = new Set(N(into).children);
+    pasteOne(h, into, false);
+    N(into).children.forEach(c => { if (!before.has(c)) made.push(c); });
+  });
+  setMarked(made);
+  save(); render();
+  toast(made.length > 1 ? `Duplicated ${made.length} branches` : 'Duplicated');
+}
+
+function markSelectionDone(done) {
+  const ids = topLevel(selIds()).filter(id => id !== doc().root);
+  if (!ids.length) return;
+  pushUndo();
+  ids.forEach(id => setDone(id, done));
+  UI.showTasks = true;
+  save(); render();
 }
 
 /* ---------------------------- text editing ------------------------- */
@@ -2149,14 +2545,17 @@ function keySetup() {
     if (mod && e.key.toLowerCase() === 'z' && e.shiftKey) { e.preventDefault(); redo(); return; }
     if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
     if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
-    if (mod && e.key.toLowerCase() === 'c' && UI.selected) { e.preventDefault(); copyBranch(UI.selected); return; }
+    if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); markAll(); render(); return; }
+    if (mod && e.key.toLowerCase() === 'c' && UI.selected) { e.preventDefault(); multi() ? copySelection() : copyBranch(UI.selected); return; }
     if (mod && e.key.toLowerCase() === 'v' && UI.selected) { e.preventDefault(); pasteBranch(UI.selected); return; }
-    if (mod && e.key.toLowerCase() === 'd' && UI.selected) { e.preventDefault(); duplicateNode(UI.selected); return; }
+    if (mod && e.key.toLowerCase() === 'd' && UI.selected) { e.preventDefault(); multi() ? duplicateSelection() : duplicateNode(UI.selected); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSide(); fitAfterResize(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); setSide('wide'); $('#search').focus(); return; }
     if (e.key === '/') { e.preventDefault(); setSide('wide'); $('#search').focus(); return; }
     if (e.key === 'Escape') {
       if ($('#ctx')) { closeContextMenu(); return; }
+      if (moveInto) { moveInto = false; render(); return; }
+      if (marked.size) { clearMarked(); render(); return; }
       if ($('#linkPop')) { closeLinkPopover(); return; }
       if (connectFrom) { connectFrom = null; render(); }
       else if (UI.focusMode) { UI.focusMode = false; render(); }
@@ -2168,8 +2567,13 @@ function keySetup() {
     if (!id) return;
     if (e.key === 'Tab') { e.preventDefault(); newChild(id); }
     else if (e.key === 'Enter') { e.preventDefault(); newSibling(id); }
-    else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
+    else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); multi() ? deleteSelection() : deleteSelected(); }
     else if (e.key === 'F2') { e.preventDefault(); editNode(id); }
+    else if (e.key === ' ' && multi()) {
+      e.preventDefault();
+      const anyOpen = selIds().some(x => N(x).children.length && !N(x).collapsed);
+      foldSelection(anyOpen);
+    }
     else if (e.key === ' ') {
       e.preventDefault();
       if (N(id).children.length) { N(id).collapsed = !N(id).collapsed; save(); render(); }
@@ -2190,7 +2594,7 @@ function navigate(key) {
       next = key === 'ArrowUp' ? sibs[i - 1] : sibs[i + 1];
     }
   }
-  if (next) { UI.selected = next; render(); }
+  if (next) { clearMarked(); UI.selected = next; render(); }
 }
 
 /* =====================================================================
@@ -2331,7 +2735,7 @@ function renderInspector() {
     body.appendChild(panelDoc());
     return;
   }
-  $('#inspTitle').textContent = N(id).text ? N(id).text.slice(0, 24) : 'Node';
+  $('#inspTitle').textContent = multi() ? `${marked.size} nodes` : (N(id).text ? N(id).text.slice(0, 24) : 'Node');
   body.appendChild(tabRow('insp'));
   body.appendChild(buildPanel(UI.inspTab || 'style', id));
 }
@@ -2366,6 +2770,27 @@ function buildPanel(tab, id) {
 /* ------------------------------ panels ----------------------------- */
 function panelActions(id, w) {
   const d = doc(), n = N(id), isRoot = id === d.root;
+
+  if (multi()) {
+    const heads = topLevel(selIds());
+    const lead = document.createElement('div');
+    lead.className = 'help';
+    lead.style.margin = '0 0 12px';
+    lead.textContent = `${marked.size} nodes selected, in ${heads.length} branch${heads.length === 1 ? '' : 'es'}.`;
+    w.appendChild(lead);
+    w.appendChild(group('Selection', rowOf([
+      chipBtn('Move into…', () => armMoveInto()),
+      chipBtn('Detach', () => detachSelection()),
+      chipBtn('Fold', () => foldSelection(true)),
+      chipBtn('Unfold', () => foldSelection(false)),
+      chipBtn('Mark done', () => markSelectionDone(true)),
+      chipBtn('Copy', () => copySelection()),
+      chipBtn('Duplicate', () => duplicateSelection()),
+      chipBtn('Clear selection', () => { clearMarked(); render(); }),
+      chipBtn('Delete', () => deleteSelection(), false, true)
+    ])));
+    return;
+  }
   w.appendChild(group('Edit', rowOf([
     chipBtn('Edit title', () => { UI.inspector = UI.inspector && window.innerWidth > 900; render(); editNode(id); }),
     chipBtn('Add child', () => newChild(id)),
@@ -2420,12 +2845,23 @@ function panelActions(id, w) {
 
 function panelStyle(id, w) {
   const d = doc(), n = N(id);
+  /* with several nodes held, every control here acts on all of them */
+  const put = (key, v) => styleSelection(x => { x[key] = v; });
+
+  if (multi()) {
+    const note = document.createElement('div');
+    note.className = 'help';
+    note.style.margin = '0 0 12px';
+    note.textContent = `Applies to all ${marked.size} selected nodes.`;
+    w.appendChild(note);
+  }
+
   w.appendChild(group('Shape', rowOf(SHAPES.map(([v, label]) =>
-    chipBtn(label, () => { pushUndo(); n.shape = v; save(); render(); }, n.shape === v)))));
+    chipBtn(label, () => put('shape', v), n.shape === v)))));
   w.appendChild(group('Border', rowOf([1, 2, 4, 6].map(v =>
-    chipBtn(v + ' pt', () => { pushUndo(); n.border = v; save(); render(); }, n.border === v)))));
+    chipBtn(v + ' pt', () => put('border', v), n.border === v)))));
   w.appendChild(group('Branch line', rowOf([['solid', 'Solid'], ['dashed', 'Dashed'], ['dotted', 'Dotted']].map(([v, l]) =>
-    chipBtn(l, () => { pushUndo(); n.lineStyle = v; save(); render(); }, n.lineStyle === v)))));
+    chipBtn(l, () => put('lineStyle', v), n.lineStyle === v)))));
 
   const colors = document.createElement('div');
   colors.className = 'row';
@@ -2436,7 +2872,7 @@ function panelStyle(id, w) {
     b.style.boxShadow = c ? 'none' : 'inset 0 0 0 2px var(--line)';
     b.title = c ? c : 'Inherit from branch';
     b.setAttribute('aria-label', c ? 'Colour ' + c : 'Inherit colour from branch');
-    b.addEventListener('click', () => { pushUndo(); n.color = c; save(); render(); });
+    b.addEventListener('click', () => put('color', c));
     colors.appendChild(b);
   });
   w.appendChild(group('Colour', colors));
@@ -2990,6 +3426,12 @@ function wire() {
       if (e.pointerType === 'mouse') sideTip(b, label);
     });
     b.addEventListener('pointerleave', hideSideTip);
+  });
+
+  $('#selClear').addEventListener('click', () => { clearMarked(); render(); });
+  $('#selMenu').addEventListener('click', e => {
+    const r = e.currentTarget.getBoundingClientRect();
+    openContextMenu(r.left, r.bottom + 6, UI.selected);
   });
 
   wireResizer();

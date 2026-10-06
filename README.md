@@ -188,7 +188,8 @@ steps are kept per document.
 | `Enter` | New sibling |
 | `Space` | Fold a branch, or edit a node with no children |
 | `F2` | Rename the selected node |
-| `Ctrl` / `Cmd` + `C`, `V` | Copy and paste a whole branch |
+| `Ctrl` / `Cmd` + `C`, `V` | Copy and paste a whole branch, or the whole selection |
+| `Ctrl` / `Cmd` + `A` | Select every node |
 | `Ctrl` / `Cmd` + `D` | Duplicate a branch |
 | `Ctrl` / `Cmd` + `Shift` + `Z` | Redo |
 | `Esc` while typing | Discard what you just typed |
@@ -216,6 +217,41 @@ Everything written carries `schemaVersion`, so future versions of MindNote can m
 old data instead of guessing at it. If a device ever finds data written by a *newer*
 version than the one running, it refuses to read it and says so, rather than reading it
 wrongly and saving the damage back.
+
+## Selecting several nodes at once
+
+Everything below works on one node or on a hundred.
+
+**To select a group**
+
+| | |
+| --- | --- |
+| Right-button drag across the canvas | Sweeps up everything the box touches |
+| Press and hold on empty canvas, then drag | The same, with a finger. Lift without moving and you get the canvas menu, as before |
+| Shift-click or Ctrl-click a node | Adds it to the selection, or takes it out again |
+| `Ctrl`/`Cmd` + `A` | Everything in the document |
+| Right-click a node → Select this branch | That node and everything under it |
+| Right-click a node → Select siblings | Everything at the same level |
+
+A bar at the top of the map counts what is held, with **Actions** and **Clear**
+beside it. `Esc`, or a tap on empty canvas, clears the selection.
+
+**What you can then do**
+
+Right-click any selected node — or press and hold it, or use the Actions button —
+and the menu covers the set rather than the one node: move into another branch,
+detach from parents, fold, unfold, mark done, colour and shape, sort, copy,
+duplicate and delete. Dragging any one of them carries the whole selection: drop
+it on a node to move everything under that node, or on empty canvas to detach it
+all as separate branches.
+
+**Move into…** is the alternative to dragging a large selection across a big map.
+Choose it, then tap the node everything should sit under. `Esc` calls it off.
+
+Deleting counts branches rather than nodes, because a selected parent already
+carries its children — "Delete 3 branches" on an eleven-node selection is telling
+you the truth about what will go. The central idea is never deleted, even by
+Select all. One `Ctrl`/`Cmd` + `Z` undoes any of it.
 
 ## The documents panel
 
