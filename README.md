@@ -69,9 +69,12 @@ while sending, and orange when there is no connection.
 - **Joining replaces the starter maps.** When a device with only the two sample maps
   joins a workspace that already has real documents, the samples are dropped rather than
   added. Anything you have actually edited is always kept and merged in.
-- **If the same document is edited on two devices at once**, the version saved most
-  recently wins for that whole document. Editing different documents at the same time is
-  always safe.
+- **If the same document is edited on two devices at once**, both sets of changes are
+  kept. Each node carries its own last-changed time, so the server merges node by node
+  rather than choosing between two whole copies: a heading retyped on the PC and a note
+  added on the phone in the same minute both survive, and a node deleted on one device
+  stays deleted. Only when the *same node* is edited on both does one have to give way,
+  and then the later edit wins.
 - **Deleting is deliberate.** A document deleted on one device disappears from the
   others and does not come back.
 - **The view is per device.** Where you have panned and zoomed stays local, so the phone

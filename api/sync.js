@@ -58,7 +58,133 @@ const histKeyFor = code => 'mindnote:' + code + ':history';
 
 const empty = () => ({ docs: {}, order: [], deleted: {}, rev: 0, schemaVersion: SCHEMA });
 
-/* newest whole document wins; a deletion wins if it happened later */
+/* --------------------------- merging ------------------------------
+   Taking the newer copy of a document whole is the obvious thing to do,
+   and it quietly loses work: a line typed on the phone and a line typed
+   on the PC within the same couple of minutes end with one of them
+   discarded without a word. So when either copy carries per-node stamps
+   (n.m, written by the client) the two are merged node by node — the
+   newer version of each node wins, a node deleted on one device stays
+   deleted, and the parent/child lists are rebuilt afterwards so no node
+   is ever stranded. A copy from a client too old to write stamps still
+   merges the previous way, whole, so nothing regresses during a rollout.
+   ------------------------------------------------------------------- */
+
+function hasStamps(d) {
+  if (!d || !d.nodes) return false;
+  for (const n of Object.values(d.nodes)) if (n && n.m) return true;
+  return false;
+}
+
+/* A node with no stamp of its own is dated by the document it arrived in. */
+const stampOf = (n, d) => (n && n.m) || (d && d.updated) || 0;
+
+/* Union two id-keyed lists, keeping each entry once. */
+function unionById(listA, listB) {
+  const out = [], seen = new Set();
+  for (const item of [...(listA || []), ...(listB || [])]) {
+    if (!item || !item.id || seen.has(item.id)) continue;
+    seen.add(item.id); out.push(item);
+  }
+  return out;
+}
+
+/* After a node-by-node merge the links can disagree with one another: two
+   devices each added a child to the same parent, so each kept its own copy
+   of that parent's children list and only one of those lists survived. A
+   node's own parent field is the fact that matters, so the lists are
+   rebuilt from it. Nothing is discarded — a node whose parent is gone, or
+   which two devices moved around each other into a loop, becomes a
+   free-standing node instead of vanishing. */
+function repair(d, hint) {
+  const nodes = d.nodes || {};
+  const hintNodes = (hint && hint.nodes) || {};
+
+  for (const n of Object.values(nodes)) {
+    if (!Array.isArray(n.children)) n.children = [];
+    if (n.parent && !nodes[n.parent]) n.parent = null;
+  }
+  /* keep only children that exist and still name this node as their parent */
+  for (const [id, n] of Object.entries(nodes)) {
+    n.children = n.children.filter(c => nodes[c] && nodes[c].parent === id);
+  }
+  /* put back any child whose parent's surviving list had lost it, at the
+     position the other copy of that parent remembered for it */
+  for (const [id, n] of Object.entries(nodes)) {
+    if (!n.parent) continue;
+    const p = nodes[n.parent];
+    if (p.children.indexOf(id) !== -1) continue;
+    const was = hintNodes[n.parent];
+    const at = was && Array.isArray(was.children) ? was.children.indexOf(id) : -1;
+    if (at >= 0 && at <= p.children.length) p.children.splice(at, 0, id);
+    else p.children.push(id);
+  }
+  /* free anything the document cannot be walked into from the top */
+  const seen = new Set();
+  const walk = from => {
+    const stack = [from];
+    while (stack.length) {
+      const id = stack.pop();
+      if (!nodes[id] || seen.has(id)) continue;
+      seen.add(id);
+      for (const c of nodes[id].children) stack.push(c);
+    }
+  };
+  if (d.root && nodes[d.root]) walk(d.root);
+  for (const [id, n] of Object.entries(nodes)) if (!n.parent) walk(id);
+  for (const [id, n] of Object.entries(nodes)) {
+    if (seen.has(id)) continue;
+    n.parent = null;
+    walk(id);
+  }
+}
+
+function mergeDoc(a, b) {
+  const newer = (b.updated || 0) >= (a.updated || 0) ? b : a;
+  const older = newer === b ? a : b;
+  if (!hasStamps(a) && !hasStamps(b)) return newer;
+
+  const gone = Object.assign({}, a.gone || {});
+  for (const [id, ts] of Object.entries(b.gone || {})) {
+    if (!gone[id] || ts > gone[id]) gone[id] = ts;
+  }
+
+  const nodes = {};
+  const ids = new Set([...Object.keys(a.nodes || {}), ...Object.keys(b.nodes || {})]);
+  for (const id of ids) {
+    const na = (a.nodes || {})[id], nb = (b.nodes || {})[id];
+    let pick, from;
+    if (!na) { pick = nb; from = b; }
+    else if (!nb) { pick = na; from = a; }
+    else if (stampOf(nb, b) >= stampOf(na, a)) { pick = nb; from = b; }
+    else { pick = na; from = a; }
+    if (!pick) continue;
+    /* a deletion only wins if it happened after that node was last edited */
+    if ((gone[id] || 0) > stampOf(pick, from)) continue;
+    nodes[id] = pick;
+  }
+  /* the root is never deletable, so never let a merge be the thing that
+     loses it */
+  const rootId = newer.root || older.root;
+  if (rootId && !nodes[rootId]) {
+    const back = (b.nodes || {})[rootId] || (a.nodes || {})[rootId];
+    if (back) nodes[rootId] = back;
+  }
+
+  const out = Object.assign({}, newer, {
+    nodes,
+    root: rootId,
+    connections: unionById(newer.connections, older.connections)
+      .filter(c => nodes[c.a] && nodes[c.b]),
+    tags: unionById(newer.tags, older.tags),
+    updated: Math.max(a.updated || 0, b.updated || 0)
+  });
+  if (Object.keys(gone).length) out.gone = gone; else delete out.gone;
+  repair(out, older);
+  return out;
+}
+
+/* document-level: a deletion wins if it happened later than the last edit */
 function merge(base, incoming) {
   const deleted = Object.assign({}, base.deleted || {}, {});
   for (const [id, ts] of Object.entries(incoming.deleted || {})) {
@@ -68,7 +194,7 @@ function merge(base, incoming) {
   const ids = new Set([...Object.keys(base.docs || {}), ...Object.keys(incoming.docs || {})]);
   for (const id of ids) {
     const a = (base.docs || {})[id], b = (incoming.docs || {})[id];
-    const pick = !a ? b : !b ? a : ((b.updated || 0) >= (a.updated || 0) ? b : a);
+    const pick = !a ? b : !b ? a : mergeDoc(a, b);
     if (!pick) continue;
     if ((deleted[id] || 0) > (pick.updated || 0)) continue;
     docs[id] = pick;
@@ -153,8 +279,15 @@ module.exports = async (req, res) => {
       /* Put an earlier version back. The version being replaced is archived
          first, so a restore can itself be undone. */
       if (body.restore != null) {
-        const index = parseInt(body.restore, 10);
-        if (!(index >= 0 && index < HISTORY_KEEP)) {
+        /* must be a whole number in range and nothing else: "3kg" is not a
+           version number however willing parseInt is to read one out of it,
+           and an empty string is not version zero */
+        const asked = body.restore;
+        const index =
+          typeof asked === 'number' ? asked
+            : (typeof asked === 'string' && asked.trim() !== '') ? Number(asked)
+              : NaN;
+        if (!Number.isInteger(index) || !(index >= 0 && index < HISTORY_KEEP)) {
           res.status(400).json({ ok: false, message: 'That is not one of the stored versions.' });
           return;
         }
