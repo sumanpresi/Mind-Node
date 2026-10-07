@@ -218,6 +218,31 @@ old data instead of guessing at it. If a device ever finds data written by a *ne
 version than the one running, it refuses to read it and says so, rather than reading it
 wrongly and saving the damage back.
 
+## Markers
+
+A marker is a small badge in its own slot on the node, apart from the text — a
+flag for *needs action now*, a star for *important*, a clock for *waiting on
+someone*. A node can carry several, and they never run into the words.
+
+**Quickest way in:** right click a node (press and hold on a touch screen) and
+pick **Flag for action** or **Mark important**. With several nodes selected the
+same menu flags all of them at once.
+
+**The full set** lives on the Markers tab of the inspector: a row of the ones
+most often reached for, then 139 more grouped by what they are for — priority
+and status, people and roles, work and documents, field and science, money and
+approval, technology, logistics. Search them by meaning rather than by
+appearance: *deadline* finds the alarm clock, *rock* the boulder, *approval* the
+signing pen.
+
+**Anything else** can be pasted into the box at the bottom — an emoji copied
+from a web page, a message, or your own keyboard. Multi-part emoji stay whole.
+
+Markers are plain text, so they cost nothing to store, travel to every device
+like the rest of the document, and render natively on Windows, Android and iOS.
+Paste a marker into the search box to list every node carrying it: 🚩 in the
+search box finds everything flagged for action.
+
 ## Typing is never lost
 
 Text goes into the document as you type, not when you click away. If the phone
