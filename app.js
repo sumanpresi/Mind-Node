@@ -139,56 +139,87 @@ const BACKUP_PREFIX = 'backup:';
 const BACKUP_KEEP = 10;                 // rolling local backups
 const BACKUP_EVERY = 20 * 60 * 60 * 1000;   // at most one a day, near enough
 const SCHEMA = 1;                       // bump when the saved shape changes
-let idbHandle = null, idbBroken = false;
+let idbHandle = null, idbBroken = false, idbOpening = null;
 let schemaBlocked = false;
+
+const idbForget = () => { idbHandle = null; };
 
 function idbOpen() {
   if (idbBroken || typeof indexedDB === 'undefined') return Promise.reject(new Error('no indexeddb'));
   if (idbHandle) return Promise.resolve(idbHandle);
-  return new Promise((res, rej) => {
+  if (idbOpening) return idbOpening;      // one open at a time, however many callers
+  idbOpening = new Promise((res, rej) => {
     let req;
     try { req = indexedDB.open(DB_NAME, 1); } catch (e) { idbBroken = true; return rej(e); }
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
     };
-    req.onsuccess = () => { idbHandle = req.result; res(idbHandle); };
+    req.onsuccess = () => {
+      idbHandle = req.result;
+      /* A connection can be closed underneath us — another tab upgrading
+         the database, or the browser reclaiming storage. Keeping the dead
+         handle would turn every later save into a silent failure until the
+         page was reloaded, so it is dropped and the next call opens a
+         fresh one. */
+      idbHandle.onclose = idbForget;
+      idbHandle.onversionchange = () => {
+        try { idbHandle.close(); } catch (e) { }
+        idbForget();
+      };
+      res(idbHandle);
+    };
     req.onerror = () => { idbBroken = true; rej(req.error); };
-    req.onblocked = () => { idbBroken = true; rej(new Error('blocked')); };
+    /* 'blocked' only means another tab still holds an older version open.
+       That passes, so it is not a reason to abandon the database for the
+       rest of the session. */
+    req.onblocked = () => rej(new Error('blocked'));
+  });
+  idbOpening.catch(() => { }).then(() => { idbOpening = null; });
+  return idbOpening;
+}
+/* Runs one transaction. If the connection turns out to have died, forgets
+   it and tries the same work once more on a fresh one. */
+function idbWork(run, retried) {
+  return idbOpen().then(db => new Promise((res, rej) => run(db, res, rej))).catch(err => {
+    const dead = err && (err.name === 'InvalidStateError' || err.name === 'TransactionInactiveError');
+    if (retried || !dead) throw err;
+    idbForget();
+    return idbWork(run, true);
   });
 }
 function idbGet(key) {
-  return idbOpen().then(db => new Promise((res, rej) => {
+  return idbWork((db, res, rej) => {
     const tx = db.transaction(DB_STORE, 'readonly');
     const r = tx.objectStore(DB_STORE).get(key || DB_KEY);
     r.onsuccess = () => res(r.result || null);
     r.onerror = () => rej(r.error);
-  }));
+  });
 }
 function idbSet(value, key) {
-  return idbOpen().then(db => new Promise((res, rej) => {
+  return idbWork((db, res, rej) => {
     const tx = db.transaction(DB_STORE, 'readwrite');
     tx.objectStore(DB_STORE).put(value, key || DB_KEY);
     tx.oncomplete = () => res(true);
     tx.onerror = () => rej(tx.error);
     tx.onabort = () => rej(tx.error || new Error('aborted'));
-  }));
+  });
 }
 function idbDel(key) {
-  return idbOpen().then(db => new Promise((res, rej) => {
+  return idbWork((db, res, rej) => {
     const tx = db.transaction(DB_STORE, 'readwrite');
     tx.objectStore(DB_STORE).delete(key);
     tx.oncomplete = () => res(true);
     tx.onerror = () => rej(tx.error);
-  }));
+  });
 }
 function idbKeys() {
-  return idbOpen().then(db => new Promise((res, rej) => {
+  return idbWork((db, res, rej) => {
     const tx = db.transaction(DB_STORE, 'readonly');
     const r = tx.objectStore(DB_STORE).getAllKeys();
     r.onsuccess = () => res(r.result || []);
     r.onerror = () => rej(r.error);
-  }));
+  });
 }
 
 /* ---------------------------- image store --------------------------
@@ -206,18 +237,29 @@ let imageCache = {};   // imageId -> data URL, populated for whatever is on scre
 
 function migrateLegacyImages() {
   let changed = false;
+  const pending = [];
   Object.values(S.docs).forEach(d => {
     Object.values(d.nodes).forEach(n => {
-      if (!n.imageId && n.image) {
-        const id = uid();
-        imageCache[id] = n.image;
-        idbSet(n.image, IMAGE_PREFIX + id).catch(() => { });
-        n.imageId = id;
-        n.image = '';
-        changed = true;
-      }
+      if (!n.image) return;                 // nothing inline left to move
+      const id = n.imageId || uid();
+      const bytes = n.image;
+      imageCache[id] = bytes;
+      if (n.imageId !== id) { n.imageId = id; changed = true; }
+      /* The inline copy is the only copy until the database has the bytes.
+         Clearing it first and then failing the write would lose the
+         picture for good, so it stays put until the write has actually
+         happened — and a node that still carries both is simply retried
+         the next time the workspace is opened. */
+      pending.push(
+        idbSet(bytes, IMAGE_PREFIX + id)
+          .then(() => { if (n.image === bytes) { n.image = ''; return true; } return false; })
+          .catch(() => false)
+      );
     });
   });
+  if (pending.length) {
+    Promise.all(pending).then(done => { if (done.some(Boolean)) save(); }).catch(() => { });
+  }
   return changed;
 }
 async function preloadImageCache() {
@@ -236,7 +278,7 @@ async function preloadImageCache() {
   if (any) render();
 }
 function imageSrcFor(n) {
-  if (n.imageId) return imageCache[n.imageId] || '';
+  if (n.imageId && imageCache[n.imageId]) return imageCache[n.imageId];
   return n.image || '';           // not yet migrated, or arrived mid-session
 }
 function setNodeImage(n, dataUrl) {
@@ -308,6 +350,7 @@ let clipboard = null;
 let lastTap = { id: null, t: 0 };
 let deletedDocs = {};       // id -> time it was deleted, so sync does not resurrect it
 let contentSigs = {};       // id -> fingerprint, so panning does not count as an edit
+let nodeSigs = {};          // id -> { nodeId: fingerprint }, for the per-node stamps below
 let workspaceSig = '';      // which documents exist, so deletes and imports are noticed too
 let hoverId = null;         // node the pointer is over, for the + handles
 
@@ -709,15 +752,88 @@ function wireSwipe() {
 
 /* ------------------------------ persistence ------------------------ */
 let saveTimer = null;
-function contentSig(d) {
-  return JSON.stringify({ n: d.nodes, m: d.name, c: d.connections, t: d.tags, l: d.layout, r: d.root });
+
+/* ------------------- per-node change stamps -------------------------
+   The server has to combine this device's copy of a document with
+   whatever another device sent. If it could only choose between the two
+   copies whole, a line typed here and a line typed on the phone within
+   the same couple of minutes would end with one of them quietly thrown
+   away. So every node carries its own last-changed time in n.m and the
+   server merges node by node.
+
+   The stamps are worked out here, by comparing each node with its
+   fingerprint from the previous save, rather than at the fifty-odd places
+   a node can be altered — one of those would eventually be forgotten, and
+   a missing stamp means lost work. d.gone records when each node was
+   deleted, so a node removed here is not posted back by a device that
+   still has it. */
+const GONE_KEEP = 500;                            // tombstones kept per document
+const GONE_MAX_AGE = 60 * 24 * 60 * 60 * 1000;    // and only for sixty days
+
+function nodeSig(n) {
+  const copy = Object.assign({}, n);
+  delete copy.m;                      // the stamp itself is not content
+  return JSON.stringify(copy);
 }
+/* One pass gives both the per-node fingerprints and the document one. */
+function docFingerprint(d) {
+  const sigs = {};
+  for (const [id, n] of Object.entries(d.nodes)) sigs[id] = nodeSig(n);
+  const body = Object.keys(sigs).sort().map(id => id + ':' + sigs[id]).join('\n');
+  const head = JSON.stringify({ m: d.name, c: d.connections, t: d.tags, l: d.layout, r: d.root });
+  return { sigs, sig: head + '\n' + body };
+}
+function contentSig(d) { return docFingerprint(d).sig; }
+
+/* Keep the tombstone list from growing without end. */
+function pruneGone(d, now) {
+  const gone = d.gone;
+  if (!gone) return;
+  const ids = Object.keys(gone);
+  if (!ids.length) { delete d.gone; return; }
+  const keep = ids
+    .filter(id => now - (gone[id] || 0) < GONE_MAX_AGE)
+    .sort((a, b) => (gone[b] || 0) - (gone[a] || 0))
+    .slice(0, GONE_KEEP);
+  if (keep.length === ids.length) return;
+  if (!keep.length) { delete d.gone; return; }
+  const next = {};
+  for (const id of keep) next[id] = gone[id];
+  d.gone = next;
+}
+/* Stamp what changed since the last save, and record what went away. */
+function stampChanges(d, sigs) {
+  const prev = nodeSigs[d.id];
+  nodeSigs[d.id] = sigs;
+  if (!prev) return false;            // first save of a document just loaded
+  const now = Date.now();
+  let touched = false;                // reported back for callers that want it
+  for (const [id, s] of Object.entries(sigs)) {
+    if (prev[id] === s) continue;
+    d.nodes[id].m = now;
+    touched = true;
+  }
+  const lost = Object.keys(prev).filter(id => !sigs[id]);
+  if (lost.length) {
+    const gone = d.gone || (d.gone = {});
+    for (const id of lost) gone[id] = now;
+    pruneGone(d, now);
+    touched = true;
+  }
+  return touched;
+}
+
 function wsSig() {
   return S.order.join(',') + '|' + Object.keys(S.docs).sort().join(',') + '|' + Object.keys(deletedDocs).sort().join(',');
 }
 function primeSigs() {
   contentSigs = {};
-  Object.values(S.docs).forEach(d => { contentSigs[d.id] = contentSig(d); });
+  nodeSigs = {};
+  Object.values(S.docs).forEach(d => {
+    const fp = docFingerprint(d);
+    contentSigs[d.id] = fp.sig;
+    nodeSigs[d.id] = fp.sigs;
+  });
   workspaceSig = wsSig();
 }
 function save() {
@@ -726,10 +842,14 @@ function save() {
   const ws = wsSig();
   if (ws !== workspaceSig) { workspaceSig = ws; changed = true; }
   if (d) {
-    const sig = contentSig(d);
-    if (contentSigs[d.id] !== sig) {
-      contentSigs[d.id] = sig; d.updated = Date.now(); changed = true;
+    const fp = docFingerprint(d);
+    if (contentSigs[d.id] !== fp.sig) {
+      contentSigs[d.id] = fp.sig;
+      stampChanges(d, fp.sigs);
+      d.updated = Date.now(); changed = true;
       delete d.demo;
+    } else if (!nodeSigs[d.id]) {
+      nodeSigs[d.id] = fp.sigs;
     }
   }
   clearTimeout(saveTimer);
@@ -765,7 +885,9 @@ function hydrate(raw) {
     Object.values(S.docs).forEach(d => {
       d.connections = d.connections || []; d.tags = d.tags || [];
       Object.values(d.nodes).forEach(n => { n.tags = n.tags || []; });
-      contentSigs[d.id] = contentSig(d);
+      const fp = docFingerprint(d);
+      contentSigs[d.id] = fp.sig;
+      nodeSigs[d.id] = fp.sigs;
     });
     migrateLegacyImages();
     workspaceSig = wsSig();
@@ -3109,7 +3231,14 @@ function panelMedia(id, w) {
     marks.forEach(em => {
       const b = document.createElement('button');
       b.className = 'marker-chip';
-      b.innerHTML = `<span>${em}</span><span class="x">✕</span>`;
+      /* a marker can arrive from another device, so it is never treated
+         as markup */
+      const face = document.createElement('span');
+      face.textContent = em;
+      const x = document.createElement('span');
+      x.className = 'x';
+      x.textContent = '✕';
+      b.append(face, x);
       b.title = 'Remove this marker';
       b.setAttribute('aria-label', 'Remove marker ' + em);
       b.addEventListener('click', () => { pushUndo(); toggleMarker(n, em); refresh(); });
@@ -3364,9 +3493,12 @@ function tagManager(nodeId) {
     const line = document.createElement('div');
     const onNode = nodeId && N(nodeId).tags.includes(t.id);
     line.className = 'tag-line' + (onNode ? ' is-on' : '');
-    line.innerHTML = `<span class="sw" style="background:${t.color}"></span>
+    line.innerHTML = `<span class="sw"></span>
       <span class="nm"></span><span class="ct">${count}</span>
       <span class="hl" title="Highlight this tag">${UI.highlightTag === t.id ? '☀' : '☼'}</span>`;
+    /* the colour travels with the tag between devices, so it is set as a
+       property rather than written into the markup */
+    line.querySelector('.sw').style.background = t.color || '';
     line.querySelector('.nm').textContent = t.name;
     line.querySelector('.hl').addEventListener('click', e => {
       e.stopPropagation();

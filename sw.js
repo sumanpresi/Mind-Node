@@ -10,13 +10,13 @@
      never be served stale.
    ===================================================================== */
 
-const CACHE = 'mindnote-v17';
+const CACHE = 'mindnote-v18';
 const SHELL = [
   './',
   './index.html',
-  './styles.css?v=17',
-  './app.js?v=17',
-  './sync.js?v=17',
+  './styles.css?v=18',
+  './app.js?v=18',
+  './sync.js?v=18',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -52,17 +52,29 @@ self.addEventListener('fetch', event => {
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/')) return;      // sync is always live
 
-  // The document: network first, cache as the safety net.
+  /* The document: the network first, so a new deploy is picked up at once —
+     but only for as long as anyone would reasonably wait. A signal that is
+     present without actually carrying anything, which is what a train or a
+     field site gives you, leaves fetch hanging for the better part of a
+     minute, and a blank screen is a far worse answer than yesterday's copy
+     of the app. The request is left running either way, so the newer page
+     still lands in the cache for next time. */
   if (req.mode === 'navigate') {
-    event.respondWith(
-      fetch(req)
-        .then(res => {
-          const copy = res.clone();
-          caches.open(CACHE).then(c => c.put('./index.html', copy)).catch(() => { });
-          return res;
-        })
-        .catch(() => caches.match('./index.html').then(r => r || caches.match('./')))
-    );
+    const fromCache = () => caches.match('./index.html').then(r => r || caches.match('./'));
+    event.respondWith(new Promise(resolve => {
+      let settled = false;
+      const done = res => { if (!settled && res) { settled = true; resolve(res); } };
+      const waited = setTimeout(() => { fromCache().then(done).catch(() => { }); }, 3500);
+      fetch(req).then(res => {
+        clearTimeout(waited);
+        const copy = res.clone();
+        caches.open(CACHE).then(c => c.put('./index.html', copy)).catch(() => { });
+        done(res);
+      }).catch(() => {
+        clearTimeout(waited);
+        fromCache().then(r => done(r || Response.error())).catch(() => done(Response.error()));
+      });
+    }));
     return;
   }
 
