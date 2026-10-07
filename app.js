@@ -17,9 +17,101 @@ const SHAPES = [
   ['square', 'Square'], ['hexagon', 'Hexagon'], ['octagon', 'Octagon'], ['cloud', 'Cloud'],
   ['line', 'Line'], ['embedded', 'Embedded']
 ];
-const EMOJI = ('💡 🎯 ✅ ⭐️ 🔥 📌 📝 📊 📈 🗺 🧭 🔍 🧠 ⚙️ 🛠 🚀 ⏰ 📅 📎 🔗 💬 ❓ ❗️ ⚠️ ' +
-  '🪨 ⛏ 🌋 🏔 🧪 🔬 🌍 💧 🧲 ⚡️ 🛰 📡 🏗 🚧 🗂 📁 💾 🖥 📱 ✏️ 📐 🧮 ' +
-  '🙂 😀 🤔 🎉 ❤️ 👍 👀 🌱 🌟 🏁 🥇 🧩 🎨 🎵 ☕️ 🍀').split(' ').filter(Boolean);
+/* ---------------------------- node markers -------------------------
+   A marker is a small badge in its own slot on the node, apart from the
+   text: a flag for "needs action now", a star for "important", a clock
+   for "waiting on someone". A node can carry several.
+
+   They are plain Unicode emoji, which means they cost nothing to store,
+   sync to every device as text, render natively on Windows, Android and
+   iOS, and can be pasted in from anywhere. Each line below is the emoji
+   followed by the words that should find it. */
+const MARKER_GROUPS = [
+  ['Priority and status',
+   '🚩 flag urgent priority action now|⭐ star important favourite key|🔥 fire hot urgent burning|' +
+   '⚠️ warning caution risk careful|❗ exclamation important urgent critical|❓ question unknown query unclear|' +
+   '✅ check done complete finished approved|❌ cross no cancel rejected wrong|⏳ hourglass waiting pending|' +
+   '⏰ alarm deadline time due|🔒 lock locked blocked private|🔓 unlock open unblocked|' +
+   '📌 pin pinned fixed note|🛑 stop halt blocked|🚧 construction progress wip ongoing|' +
+   '🔔 bell reminder alert notify|💤 sleep dormant paused later|🏁 finish goal milestone end|' +
+   '🆕 new fresh recent|🔝 top priority highest'],
+  ['People and roles',
+   '👤 person individual user|👥 people group team pair|🧑‍💼 officer official staff employee|' +
+   '👨‍🔬 scientist researcher geologist|👩‍🔬 scientist researcher woman|🤝 handshake agreement deal partner|' +
+   '🗣️ speaking voice spokesperson|👔 tie manager director senior|🧑‍⚖️ judge authority approval|' +
+   '👮 police officer enforcement|🧑‍🏫 teacher trainer instructor|👷 worker engineer site'],
+  ['Work and documents',
+   '📝 memo note write draft|📄 page document file paper|📋 clipboard list checklist form|' +
+   '📁 folder directory collection|🗂️ dividers index archive category|📊 chart bar graph data statistics|' +
+   '📈 increase growth up trend rising|📉 decrease down falling decline|📅 calendar date schedule|' +
+   '🗓️ calendar spiral planner|💼 briefcase business work case|📎 paperclip attach attachment|' +
+   '✏️ pencil edit draft write|🖊️ pen sign signature|📚 books reference library study|' +
+   '📰 news newspaper article press|📥 inbox received incoming|📤 outbox sent outgoing|' +
+   '🧾 receipt invoice bill statement|📜 scroll order notification circular|' +
+   '🏷️ label tag name|🖇️ clips linked documents|📒 ledger register record|🗒️ notepad jotting'],
+  ['Communication',
+   '📧 email mail message|✉️ envelope letter post|📞 phone call telephone|📱 mobile phone cell|' +
+   '💬 speech comment discussion chat|📢 announce megaphone broadcast|🔊 loud sound volume|' +
+   '📡 satellite transmission signal remote|🛰️ satellite orbit remote sensing'],
+  ['Places and organisation',
+   '🏢 office building headquarters chq|🏛️ government ministry institution|🏦 bank finance treasury|' +
+   '🏭 factory plant industry|🏫 school college institute training|🏠 home house base|' +
+   '🌍 world globe earth global|🗺️ map atlas region area|📍 location place marker spot|' +
+   '🧭 compass direction navigation bearing|🚩 flag region zone'],
+  ['Field and science',
+   '🪨 rock stone boulder sample|⛏️ pick mining excavation|🔨 hammer field tool|' +
+   '🏔️ mountain peak terrain relief|🌋 volcano volcanic igneous|🏜️ desert arid terrain|' +
+   '🔬 microscope lab analysis petrology|🧪 test tube chemical assay geochemical|' +
+   '⚗️ alembic laboratory experiment|🔭 telescope survey observation|💎 gem mineral crystal ore|' +
+   '🧲 magnet magnetic geophysics|💧 water hydro drop fluid|🌊 wave sea marine offshore|' +
+   '🪵 core log drill borehole|📐 ruler measure survey angle|📏 scale measure length|' +
+   '🧮 calculate count tally abacus|⚡ power energy electric geophysics'],
+  ['Money and approval',
+   '💰 money budget funds cost|💵 cash rupee dollar payment|💳 card payment expenditure|' +
+   '🪙 coin small amount token|🧮 estimate calculation costing|✍️ sign approve signature|' +
+   '🖋️ signature approval sign off|⚖️ balance justice legal compare|🎯 target goal objective aim'],
+  ['Technology',
+   '💻 laptop computer machine|🖥️ desktop monitor workstation|🗄️ cabinet storage repository archive|' +
+   '💾 save disk backup store|🖧 network link connection|☁️ cloud server hosting online|' +
+   '⚙️ gear settings config process|🛠️ tools maintenance fix build|🔧 wrench repair adjust|' +
+   '🔑 key access credential password|🛡️ shield security protection safe|🔗 link url reference|' +
+   '🧰 toolbox kit resources|🐛 bug defect issue error|🔄 refresh sync update cycle'],
+  ['Transport and logistics',
+   '🚚 truck delivery transport dispatch|🚗 car vehicle travel|✈️ plane flight travel air|' +
+   '🚂 train rail transport|🚢 ship vessel sea cargo|📦 package parcel consignment lot|' +
+   '🛻 pickup field vehicle|🏍️ bike motorcycle'],
+  ['Thinking and ideas',
+   '💡 idea insight bulb suggestion|🧠 brain think analysis concept|🔍 search find investigate review|' +
+   '🧩 piece part component fit|🎓 education qualification degree|🏆 trophy award achievement win|' +
+   '🥇 medal first rank best|🚀 rocket launch start accelerate|🌱 seed start new growth|' +
+   '♻️ recycle reuse rework revise|🔁 repeat loop recurring|📌 remember keep note']
+];
+
+/* flattened: [emoji, searchable words] */
+const MARKER_INDEX = MARKER_GROUPS.flatMap(([group, spec]) =>
+  spec.split('|').map(entry => {
+    const parts = entry.trim().split(/\s+/);
+    return { emoji: parts[0], words: parts.slice(1).join(' '), group };
+  })
+);
+/* the handful worth a single tap, in the order a person reaches for them */
+const QUICK_MARKERS = ['🚩', '⭐', '🔥', '⚠️', '⏰', '✅', '❓', '📌', '🔒', '🚧'];
+
+/* A node written before markers existed carries a single n.emoji. It is
+   read as the first marker and rewritten on the next change, so nothing
+   already saved is lost and no migration pass is needed. */
+function markersOf(n) {
+  if (Array.isArray(n.markers)) return n.markers;
+  return n.emoji ? [n.emoji] : [];
+}
+function setMarkers(n, list) {
+  n.markers = list.slice(0, 6);        // more than a few stops being a signal
+  n.emoji = n.markers[0] || '';        // kept so an older client still shows one
+}
+function toggleMarker(n, em) {
+  const cur = markersOf(n);
+  setMarkers(n, cur.includes(em) ? cur.filter(x => x !== em) : [...cur, em]);
+}
 
 /* --------------------------- safe storage -------------------------- */
 const store = (() => {
@@ -224,7 +316,7 @@ function mkNode(parent, text) {
   return {
     id: uid(), parent, text: text || '', children: [], collapsed: false,
     shape: 'rounded', color: null, border: 2, lineStyle: 'solid',
-    note: '', tags: [], done: false, emoji: '', image: '', imageId: '', link: null,
+    note: '', tags: [], done: false, emoji: '', markers: [], image: '', imageId: '', link: null,
     checklist: false,
     x: null, y: null
   };
@@ -722,7 +814,7 @@ function pasteOne(oldId, intoId, plain) {
     n.id = uid(); n.parent = parent; n.children = []; n.x = null; n.y = null;
     if (plain) {                       // arrive with the branch's own look
       n.shape = 'rounded'; n.color = null; n.border = 2; n.lineStyle = 'solid';
-      n.emoji = ''; n.image = ''; n.imageId = '';
+      n.emoji = ''; n.markers = []; n.image = ''; n.imageId = '';
     }
     d.nodes[n.id] = n;
     (src.children || []).forEach(c => { const k = clone(c, n.id); if (k) n.children.push(k.id); });
@@ -995,7 +1087,7 @@ function duplicateDoc(id) {
 }
 
 function openDoc(id) {
-  S.active = id; UI.selected = null; connectFrom = null; clearMarked();
+  S.active = id; UI.selected = null; connectFrom = null; clearMarked(); findAt = -1; refreshFindRing();
   if (window.innerWidth <= 900 && sideMode() === 'wide') setSide('hidden', { quiet: true });
   const needsFit = !S.docs[id].cam;
   save(); render();
@@ -1147,7 +1239,8 @@ function buildNodeEl(id) {
   el.className = `node sh-${n.shape}` + (id === d.root ? ' is-root' : '') +
     (!n.parent && id !== d.root ? ' is-float' : '') +
     (id === UI.selected ? ' is-sel' : '') +
-    (marked.has(id) ? ' is-marked' : '');
+    (marked.has(id) ? ' is-marked' : '') +
+    (findQuery && nodeMatches(n, findQuery) ? ' is-hit' : '');
   el.dataset.id = id;
   el.style.setProperty('--nc', c);
   if (n.shape !== 'line' && n.shape !== 'embedded') el.style.borderWidth = n.border + 'px';
@@ -1168,14 +1261,31 @@ function buildNodeEl(id) {
     t.textContent = st === 'done' ? '✓' : '';
     head.appendChild(t);
   }
-  if (UI.showImages && n.emoji) {
-    const e = document.createElement('span');
-    e.className = 'n-emoji'; e.textContent = n.emoji; head.appendChild(e);
+  const marks = markersOf(n);
+  if (UI.showImages && marks.length) {
+    /* their own slot, so a flag reads as a flag and not as part of the
+       sentence the node is making */
+    const box = document.createElement('span');
+    box.className = 'n-markers';
+    marks.forEach(em => {
+      const e = document.createElement('span');
+      e.className = 'n-marker';
+      e.textContent = em;
+      box.appendChild(e);
+    });
+    head.appendChild(box);
   }
   const txt = document.createElement('span');
   const headerLinked = !!(n.url && n.url.trim());
   txt.className = 'txt' + (headerLinked ? ' has-link' : '');
-  txt.textContent = n.text;
+  /* A node with no text yet is kept, not deleted, so it has to be visible
+     and big enough to click. */
+  if (n.text) {
+    txt.textContent = n.text;
+  } else {
+    txt.textContent = 'Untitled';
+    txt.classList.add('is-untitled');
+  }
   if (headerLinked) txt.dataset.linkpeek = id;
   head.appendChild(txt);
 
@@ -2017,6 +2127,16 @@ function openContextMenu(x, y, id) {
     item('Detach from parents', () => detachSelection());
     item('Fold branches', () => foldSelection(true));
     item('Unfold branches', () => foldSelection(false));
+    item('Flag all for action 🚩', () => {
+      pushUndo();
+      selIds().forEach(x => { const nn = N(x); if (nn && !markersOf(nn).includes('🚩')) toggleMarker(nn, '🚩'); });
+      UI.showImages = true; save(); render();
+    });
+    item('Clear markers', () => {
+      pushUndo();
+      selIds().forEach(x => { const nn = N(x); if (nn) setMarkers(nn, []); });
+      save(); render();
+    });
     item('Mark as done', () => markSelectionDone(true));
     item('Clear task marks', () => markSelectionDone(false));
     sep();
@@ -2068,6 +2188,17 @@ function openContextMenu(x, y, id) {
         if (n.checklist) UI.showTasks = true;   // so the parent's ✓/part/○ dot is visible right away
         save(); render();
       }, { skip: isRoot });
+    const hasMark = em => markersOf(n).includes(em);
+    item(hasMark('🚩') ? 'Clear the action flag' : 'Flag for action 🚩',
+         () => { pushUndo(); toggleMarker(n, '🚩'); UI.showImages = true; save(); render(); });
+    item(hasMark('⭐') ? 'No longer important' : 'Mark important ⭐',
+         () => { pushUndo(); toggleMarker(n, '⭐'); UI.showImages = true; save(); render(); });
+    item('More markers…', () => {
+      if (window.innerWidth > 900) { UI.inspector = true; UI.inspTab = 'media'; }
+      else UI.sheetTab = 'media';
+      save(); render();
+    });
+    sep();
     item('Create connection', () => doAct('connect'));
     item('Sort children A–Z', () => sortChildren(id), { skip: n.children.length < 2 });
     sep();
@@ -2429,14 +2560,28 @@ function readText(el) {
   const t = (el.innerText != null) ? el.innerText : el.textContent;
   return (t || '');
 }
+/* Set while a node is open for editing, so the text can be rescued from
+   outside this closure — on pagehide, on the app being backgrounded, or
+   anywhere else the element might vanish without a blur. */
+let commitEditor = null;
+
 function editNode(id) {
   closeLinkPopover();
   if (editing === id) return;
   const el = $(`#nodes .node[data-id="${id}"] .txt`) || $(`#nodes [data-txt="${id}"]`) || $(`#outline [data-txt="${id}"]`);
   if (!el) return;
+  const node0 = N(id);
+  if (!node0) return;
+
+  const wasText = node0.text || '';
+  const startedBlank = !wasText.trim();
+
   editing = id;
   const wrap = el.closest('.node');
   if (wrap) wrap.classList.add('editing');
+  /* an empty node shows a muted placeholder: clear it so the caret starts
+     on nothing rather than on the word "Untitled" */
+  if (el.classList.contains('is-untitled')) { el.textContent = ''; el.classList.remove('is-untitled'); }
   el.contentEditable = 'true';
   el.dataset.editing = '1';
   el.focus();
@@ -2444,27 +2589,67 @@ function editNode(id) {
   r.selectNodeContents(el);
   const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
 
+  /* The model is the record, not the DOM. Every keystroke lands in the
+     node immediately, so text cannot be lost when the element goes away
+     without a blur — a phone keyboard dismissed by a system gesture, the
+     browser backgrounded and reclaimed, a tab closed mid-word. */
+  const liveCommit = () => {
+    const node = N(id);
+    if (!node) return false;
+    const t = readText(el).replace(/\s+$/, '');
+    if (node.text === t) return false;
+    node.text = t;
+    if (id === doc().root) doc().name = t || 'Untitled';
+    return true;
+  };
+  let liveTimer = null;
+  const onInput = () => {
+    if (!liveCommit()) return;
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(save, 350);   // to disk shortly after, not per keystroke
+  };
+  commitEditor = () => { clearTimeout(liveTimer); if (liveCommit()) persistNow(); };
+
   const done = commit => {
+    clearTimeout(liveTimer);
+    commitEditor = null;
     el.removeEventListener('blur', onBlur);
     el.removeEventListener('keydown', onKey);
+    el.removeEventListener('input', onInput);
     const text = readText(el).replace(/\s+$/, '');
     editing = null;
     const node = N(id);
-    const finalText = commit ? text : (node ? node.text : '');
-    if (node && node.parent && !node.children.length && !finalText.trim()) {
-      const parent = node.parent;        // a node left blank was never really wanted
-      removeNode(id);
-      UI.selected = parent;
+
+    if (!commit) {
+      /* Escape means "forget this edit". A node that was blank when the
+         edit began and is blank still was a mis-tap, so it goes; anything
+         else is put back the way it was. */
+      if (node) {
+        if (startedBlank && !node.children.length && node.parent) {
+          const parent = node.parent;
+          removeNode(id);
+          UI.selected = parent;
+          save(); render();
+          return;
+        }
+        node.text = wasText;
+        if (id === doc().root) doc().name = wasText || 'Untitled';
+      }
       save(); render();
       return;
     }
-    if (commit && node) {
+
+    /* Committing keeps the node even when it is still empty: tapping away
+       should never cost you a node you deliberately made. It renders as a
+       muted "Untitled" until you name it. */
+    if (node) {
       node.text = text;
       if (id === doc().root) doc().name = text || 'Untitled';
       save();
     }
     render();
   };
+
   const onBlur = () => done(true);
   const onKey = e => {
     e.stopPropagation();
@@ -2474,6 +2659,7 @@ function editNode(id) {
   };
   el.addEventListener('blur', onBlur);
   el.addEventListener('keydown', onKey);
+  el.addEventListener('input', onInput);
   setTimeout(keepEditVisible, 220);
 }
 
@@ -2648,7 +2834,8 @@ function olNode(id, lvl) {
   const txt = document.createElement('div');
   txt.className = 'ol-txt' + (linked ? ' has-link' : '');
   txt.dataset.txt = id;
-  txt.textContent = (n.emoji ? n.emoji + ' ' : '') + (n.text || 'Untitled');
+  const olMarks = markersOf(n);
+  txt.textContent = (olMarks.length ? olMarks.join('') + ' ' : '') + (n.text || 'Untitled');
   txt.addEventListener('click', () => { UI.selected = id; render(); });
   txt.addEventListener('dblclick', () => editOutline(id, txt));
   row.appendChild(txt);
@@ -2722,7 +2909,7 @@ const PANEL_TABS = [
   ['actions', 'Actions', '<svg viewBox="0 0 20 20" class="ic"><circle cx="5" cy="10" r="1.3"/><circle cx="10" cy="10" r="1.3"/><circle cx="15" cy="10" r="1.3"/></svg>'],
   ['style', 'Style', '<svg viewBox="0 0 20 20" class="ic"><path d="M6 13c-1.5 0-2.5 1-2.5 3 2.5 0 3.5-1 3.5-2"/><path d="M8 14l7.5-7.5a1.8 1.8 0 00-2.5-2.5L5.5 11.5"/></svg>'],
   ['note', 'Note', '<svg viewBox="0 0 20 20" class="ic"><rect x="4" y="3" width="12" height="14" rx="2"/><path d="M7 7h6M7 10h6M7 13h4"/></svg>'],
-  ['media', 'Media', '<svg viewBox="0 0 20 20" class="ic"><rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.4"/><path d="M4 14l4-4 3.5 3.5L14 11l2 2"/></svg>'],
+  ['media', 'Markers', '<svg viewBox="0 0 20 20" class="ic"><rect x="3" y="4" width="14" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.4"/><path d="M4 14l4-4 3.5 3.5L14 11l2 2"/></svg>'],
   ['tags', 'Tags', '<svg viewBox="0 0 20 20" class="ic"><path d="M3 8.5V4h4.5l8.5 8.5-4.5 4.5L3 8.5z"/><circle cx="6.6" cy="6.6" r="1.1"/></svg>']
 ];
 
@@ -2903,17 +3090,134 @@ function panelNote(id, w) {
 
 function panelMedia(id, w) {
   const n = N(id);
-  const grid = document.createElement('div');
-  grid.className = 'emoji-grid';
-  EMOJI.forEach(em => {
-    const b = document.createElement('button');
-    b.textContent = em;
-    b.setAttribute('aria-label', 'Sticker ' + em);
-    b.addEventListener('click', () => { pushUndo(); n.emoji = n.emoji === em ? '' : em; save(); render(); });
-    grid.appendChild(b);
-  });
-  w.appendChild(group('Stickers and emoji', grid));
+  const refresh = () => { save(); render(); };
 
+  /* ---- what this node already carries ---- */
+  const current = document.createElement('div');
+  current.className = 'marker-current';
+  const drawCurrent = () => {
+    current.innerHTML = '';
+    const marks = markersOf(n);
+    if (!marks.length) {
+      const empty = document.createElement('span');
+      empty.className = 'help';
+      empty.style.margin = '0';
+      empty.textContent = 'No markers yet. Pick one below, search for it, or paste one in.';
+      current.appendChild(empty);
+      return;
+    }
+    marks.forEach(em => {
+      const b = document.createElement('button');
+      b.className = 'marker-chip';
+      b.innerHTML = `<span>${em}</span><span class="x">✕</span>`;
+      b.title = 'Remove this marker';
+      b.setAttribute('aria-label', 'Remove marker ' + em);
+      b.addEventListener('click', () => { pushUndo(); toggleMarker(n, em); refresh(); });
+      current.appendChild(b);
+    });
+  };
+  drawCurrent();
+  w.appendChild(group('On this node', current));
+
+  /* ---- the ones reached for most often ---- */
+  const quick = document.createElement('div');
+  quick.className = 'marker-quick';
+  QUICK_MARKERS.forEach(em => {
+    const entry = MARKER_INDEX.find(x => x.emoji === em);
+    const b = document.createElement('button');
+    b.className = 'marker-btn' + (markersOf(n).includes(em) ? ' is-on' : '');
+    b.textContent = em;
+    b.title = entry ? entry.words : em;
+    b.setAttribute('aria-label', entry ? entry.words.split(' ')[0] : em);
+    b.addEventListener('click', () => { pushUndo(); toggleMarker(n, em); refresh(); });
+    quick.appendChild(b);
+  });
+  w.appendChild(group('Quick markers', quick));
+
+  /* ---- search the whole set by what the marker means ---- */
+  const findWrap = document.createElement('div');
+  const find = document.createElement('input');
+  find.className = 'f-input';
+  find.type = 'search';
+  find.placeholder = 'Search markers — try flag, deadline, rock, approval';
+  findWrap.appendChild(find);
+
+  const results = document.createElement('div');
+  results.className = 'marker-results';
+  findWrap.appendChild(results);
+
+  const drawResults = () => {
+    const q = find.value.trim().toLowerCase();
+    results.innerHTML = '';
+    const groups = {};
+    MARKER_INDEX.forEach(item => {
+      if (q && !item.words.includes(q) && !item.emoji.includes(q)) return;
+      (groups[item.group] = groups[item.group] || []).push(item);
+    });
+    const names = Object.keys(groups);
+    if (!names.length) {
+      const none = document.createElement('div');
+      none.className = 'help';
+      none.textContent = 'Nothing matches that. You can still paste any emoji below.';
+      results.appendChild(none);
+      return;
+    }
+    names.forEach(name => {
+      const h = document.createElement('div');
+      h.className = 'marker-group';
+      h.textContent = name;
+      results.appendChild(h);
+      const row = document.createElement('div');
+      row.className = 'marker-quick';
+      groups[name].forEach(item => {
+        const b = document.createElement('button');
+        b.className = 'marker-btn' + (markersOf(n).includes(item.emoji) ? ' is-on' : '');
+        b.textContent = item.emoji;
+        b.title = item.words;
+        b.setAttribute('aria-label', item.words.split(' ')[0]);
+        b.addEventListener('click', () => { pushUndo(); toggleMarker(n, item.emoji); refresh(); });
+        row.appendChild(b);
+      });
+      results.appendChild(row);
+    });
+  };
+  find.addEventListener('input', drawResults);
+  drawResults();
+  w.appendChild(group('All markers', findWrap));
+
+  /* ---- anything at all, pasted from wherever you found it ---- */
+  const pasteWrap = document.createElement('div');
+  const paste = document.createElement('input');
+  paste.className = 'f-input';
+  paste.placeholder = 'Paste any emoji here, then press Enter';
+  const addPasted = () => {
+    const raw = paste.value.trim();
+    if (!raw) return;
+    /* take the glyphs, not a sentence someone pasted by accident */
+    const glyphs = Array.from(raw).filter(ch => !/[\s\w.,;:'"()\[\]{}<>/\\-]/.test(ch));
+    if (!glyphs.length) { toast('That did not contain an emoji'); return; }
+    pushUndo();
+    const seen = new Set(markersOf(n));
+    const add = [];
+    /* keep variation selectors and skin tones attached to their glyph */
+    Array.from(raw.match(/\p{Extended_Pictographic}(\uFE0F|\u200D\p{Extended_Pictographic}|\p{Emoji_Modifier})*/gu) || [])
+      .forEach(em => { if (!seen.has(em)) { seen.add(em); add.push(em); } });
+    const final = add.length ? [...markersOf(n), ...add] : [...markersOf(n), glyphs[0]];
+    setMarkers(n, final);
+    paste.value = '';
+    refresh();
+  };
+  paste.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addPasted(); } });
+  paste.addEventListener('paste', () => setTimeout(addPasted, 0));
+  pasteWrap.appendChild(paste);
+  const hint = document.createElement('div');
+  hint.className = 'help';
+  hint.textContent = 'Anything you can copy — from a web page, a message, your own keyboard. ' +
+    'Markers are text, so they travel to every device and cost nothing to store.';
+  pasteWrap.appendChild(hint);
+  w.appendChild(group('Paste a marker', pasteWrap));
+
+  /* ---- images stay where they were ---- */
   const media = document.createElement('div');
   const file = document.createElement('input');
   file.type = 'file'; file.accept = 'image/*'; file.className = 'f-input';
@@ -3139,15 +3443,55 @@ function escapeHtml(s) {
 /* =====================================================================
    SEARCH
    ===================================================================== */
+/* On a map of a few hundred nodes a list of results is not enough: you
+   need to see where the matches are. The query is kept so render() can
+   mark every matching node, and Enter walks through them. */
+let findQuery = '';
+let findRing = [];      // matching ids in the open document, in map order
+let findAt = -1;
+
+function nodeMatches(n, q) {
+  /* markers are part of the haystack, so pasting 🚩 into the search box
+     lists every node flagged for action */
+  const hay = (n.text || '') + ' ' + (n.note || '') + ' ' + markersOf(n).join(' ');
+  return hay.toLowerCase().includes(q);
+}
+function refreshFindRing() {
+  findRing = [];
+  if (!findQuery) return;
+  const d = doc();
+  if (!d) return;
+  const walk = id => {
+    const n = d.nodes[id];
+    if (!n) return;
+    if (nodeMatches(n, findQuery)) findRing.push(id);
+    kidsOf(n).forEach(walk);
+  };
+  rootsOf().forEach(walk);
+}
+function jumpToNextMatch(back) {
+  if (!findRing.length) return;
+  findAt = (findAt + (back ? -1 : 1) + findRing.length) % findRing.length;
+  const id = findRing[findAt];
+  ancestors(id).forEach(a => { if (N(a)) N(a).collapsed = false; });
+  UI.selected = id;
+  save(); render(); centerOn(id);
+  toast(`Match ${findAt + 1} of ${findRing.length}`);
+}
+
 function runSearch(q) {
   const box = $('#searchResults');
   q = q.trim().toLowerCase();
-  if (!q) { box.hidden = true; box.innerHTML = ''; return; }
+  findQuery = q;
+  findAt = -1;
+  refreshFindRing();
+  if (!q) { box.hidden = true; box.innerHTML = ''; render(); return; }
+  render();   // light up the matches on the map
   const hits = [];
   S.order.forEach(did => {
     const d = S.docs[did];
     Object.values(d.nodes).forEach(n => {
-      const hay = (n.text + ' ' + n.note).toLowerCase();
+      const hay = (n.text + ' ' + n.note + ' ' + markersOf(n).join(' ')).toLowerCase();
       if (hay.includes(q)) hits.push({ did, id: n.id, text: n.text, docName: d.name });
     });
   });
@@ -3156,6 +3500,12 @@ function runSearch(q) {
   if (!hits.length) {
     box.innerHTML = '<div class="sr-empty">No matches. Try a shorter word.</div>';
     return;
+  }
+  if (findRing.length) {
+    const head = document.createElement('div');
+    head.className = 'sr-head';
+    head.textContent = `${findRing.length} in this map — press Enter to step through them`;
+    box.appendChild(head);
   }
   hits.slice(0, 40).forEach(h => {
     const el = document.createElement('div');
@@ -3479,6 +3829,10 @@ function wire() {
   $('#zoomFit').addEventListener('click', fitView);
 
   $('#search').addEventListener('input', e => runSearch(e.target.value));
+  $('#search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); jumpToNextMatch(e.shiftKey); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.target.value = ''; runSearch(''); e.target.blur(); }
+  });
 
   cycleTheme = () => {
     UI.theme = UI.theme === 'light' ? 'dark' : UI.theme === 'dark' ? 'system' : 'light';
@@ -3524,6 +3878,20 @@ function wire() {
       if (editing) setTimeout(keepEditVisible, 60); else onViewportChange();
     });
   }
+
+  /* A browser can discard a page without warning — a tab closed, a phone
+     switching apps, the OS reclaiming memory. Commit whatever is being
+     typed and write it out synchronously before that happens. These are
+     the events that actually fire on mobile; beforeunload often does not. */
+  const flushNow = () => {
+    try { if (commitEditor) commitEditor(); } catch (e) { }
+    persistNow();
+  };
+  window.addEventListener('pagehide', flushNow);
+  window.addEventListener('beforeunload', flushNow);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushNow();
+  });
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
