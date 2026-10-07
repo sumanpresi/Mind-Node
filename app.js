@@ -1755,9 +1755,24 @@ function cam() {
   if (!d.cam) d.cam = { x: $('#canvas').clientWidth / 2, y: $('#canvas').clientHeight / 2, s: 1 };
   return d.cam;
 }
+/* While the map is being moved it is worth handing to the compositor, which
+   is what `will-change` asks for. Left on permanently, though, the browser
+   keeps scaling one cached picture of the map rather than redrawing the
+   text at the zoom actually in use, and every label looks soft. So the hint
+   goes on while the camera is moving and comes off once it settles, which
+   makes the browser redraw the text sharply at the resting zoom. */
+let camSettle = null;
 function applyCam() {
   const c = cam();
-  $('#world').style.transform = `translate(${c.x}px, ${c.y}px) scale(${c.s})`;
+  const world = $('#world');
+  if (!world) return;
+  /* Whole pixels: a fractional offset puts every glyph across a pixel
+     boundary, which is the other half of why small text looked hazy. */
+  const x = Math.round(c.x), y = Math.round(c.y);
+  world.style.transform = `translate(${x}px, ${y}px) scale(${c.s})`;
+  world.classList.add('is-moving');
+  clearTimeout(camSettle);
+  camSettle = setTimeout(() => world.classList.remove('is-moving'), 180);
   const z = $('#zoomFit');
   if (z) z.textContent = Math.round(c.s * 100) + '%';
 }

@@ -48,7 +48,11 @@ body{
   font-family:"Manrope",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
   color:var(--text);
   background:var(--paper);
-  -webkit-font-smoothing:antialiased;
+  /* No -webkit-font-smoothing here on purpose. Setting it to "antialiased"
+     turns off the subpixel rendering Windows uses (ClearType) and leaves
+     plain grey antialiasing, which looks thin and smeared at small sizes —
+     which is what map labels are once the map is zoomed below 100%. Each
+     platform's own default is the sharpest thing it can do. */
   overscroll-behavior:none;
 }
 button,input,select,textarea{font:inherit;color:inherit}
@@ -333,7 +337,11 @@ button{cursor:pointer;background:none;border:0}
     var(--paper);
   -webkit-user-select:none;user-select:none;
 }
-#world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+/* The compositor hint is only wanted while the map is actually moving.
+   Left on, the browser rescales one cached picture of the map instead of
+   redrawing the labels at the zoom in use, and the text looks soft. */
+#world{position:absolute;left:0;top:0;transform-origin:0 0}
+#world.is-moving{will-change:transform}
 #edges{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;pointer-events:none}
 #nodes{position:absolute;left:0;top:0;width:0;height:0}
 
