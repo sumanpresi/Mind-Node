@@ -995,7 +995,7 @@ function duplicateDoc(id) {
 }
 
 function openDoc(id) {
-  S.active = id; UI.selected = null; connectFrom = null; clearMarked();
+  S.active = id; UI.selected = null; connectFrom = null; clearMarked(); findAt = -1; refreshFindRing();
   if (window.innerWidth <= 900 && sideMode() === 'wide') setSide('hidden', { quiet: true });
   const needsFit = !S.docs[id].cam;
   save(); render();
@@ -1147,7 +1147,8 @@ function buildNodeEl(id) {
   el.className = `node sh-${n.shape}` + (id === d.root ? ' is-root' : '') +
     (!n.parent && id !== d.root ? ' is-float' : '') +
     (id === UI.selected ? ' is-sel' : '') +
-    (marked.has(id) ? ' is-marked' : '');
+    (marked.has(id) ? ' is-marked' : '') +
+    (findQuery && nodeMatches(n, findQuery) ? ' is-hit' : '');
   el.dataset.id = id;
   el.style.setProperty('--nc', c);
   if (n.shape !== 'line' && n.shape !== 'embedded') el.style.borderWidth = n.border + 'px';
@@ -1175,7 +1176,14 @@ function buildNodeEl(id) {
   const txt = document.createElement('span');
   const headerLinked = !!(n.url && n.url.trim());
   txt.className = 'txt' + (headerLinked ? ' has-link' : '');
-  txt.textContent = n.text;
+  /* A node with no text yet is kept, not deleted, so it has to be visible
+     and big enough to click. */
+  if (n.text) {
+    txt.textContent = n.text;
+  } else {
+    txt.textContent = 'Untitled';
+    txt.classList.add('is-untitled');
+  }
   if (headerLinked) txt.dataset.linkpeek = id;
   head.appendChild(txt);
 
@@ -2429,14 +2437,28 @@ function readText(el) {
   const t = (el.innerText != null) ? el.innerText : el.textContent;
   return (t || '');
 }
+/* Set while a node is open for editing, so the text can be rescued from
+   outside this closure — on pagehide, on the app being backgrounded, or
+   anywhere else the element might vanish without a blur. */
+let commitEditor = null;
+
 function editNode(id) {
   closeLinkPopover();
   if (editing === id) return;
   const el = $(`#nodes .node[data-id="${id}"] .txt`) || $(`#nodes [data-txt="${id}"]`) || $(`#outline [data-txt="${id}"]`);
   if (!el) return;
+  const node0 = N(id);
+  if (!node0) return;
+
+  const wasText = node0.text || '';
+  const startedBlank = !wasText.trim();
+
   editing = id;
   const wrap = el.closest('.node');
   if (wrap) wrap.classList.add('editing');
+  /* an empty node shows a muted placeholder: clear it so the caret starts
+     on nothing rather than on the word "Untitled" */
+  if (el.classList.contains('is-untitled')) { el.textContent = ''; el.classList.remove('is-untitled'); }
   el.contentEditable = 'true';
   el.dataset.editing = '1';
   el.focus();
@@ -2444,27 +2466,67 @@ function editNode(id) {
   r.selectNodeContents(el);
   const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
 
+  /* The model is the record, not the DOM. Every keystroke lands in the
+     node immediately, so text cannot be lost when the element goes away
+     without a blur — a phone keyboard dismissed by a system gesture, the
+     browser backgrounded and reclaimed, a tab closed mid-word. */
+  const liveCommit = () => {
+    const node = N(id);
+    if (!node) return false;
+    const t = readText(el).replace(/\s+$/, '');
+    if (node.text === t) return false;
+    node.text = t;
+    if (id === doc().root) doc().name = t || 'Untitled';
+    return true;
+  };
+  let liveTimer = null;
+  const onInput = () => {
+    if (!liveCommit()) return;
+    clearTimeout(liveTimer);
+    liveTimer = setTimeout(save, 350);   // to disk shortly after, not per keystroke
+  };
+  commitEditor = () => { clearTimeout(liveTimer); if (liveCommit()) persistNow(); };
+
   const done = commit => {
+    clearTimeout(liveTimer);
+    commitEditor = null;
     el.removeEventListener('blur', onBlur);
     el.removeEventListener('keydown', onKey);
+    el.removeEventListener('input', onInput);
     const text = readText(el).replace(/\s+$/, '');
     editing = null;
     const node = N(id);
-    const finalText = commit ? text : (node ? node.text : '');
-    if (node && node.parent && !node.children.length && !finalText.trim()) {
-      const parent = node.parent;        // a node left blank was never really wanted
-      removeNode(id);
-      UI.selected = parent;
+
+    if (!commit) {
+      /* Escape means "forget this edit". A node that was blank when the
+         edit began and is blank still was a mis-tap, so it goes; anything
+         else is put back the way it was. */
+      if (node) {
+        if (startedBlank && !node.children.length && node.parent) {
+          const parent = node.parent;
+          removeNode(id);
+          UI.selected = parent;
+          save(); render();
+          return;
+        }
+        node.text = wasText;
+        if (id === doc().root) doc().name = wasText || 'Untitled';
+      }
       save(); render();
       return;
     }
-    if (commit && node) {
+
+    /* Committing keeps the node even when it is still empty: tapping away
+       should never cost you a node you deliberately made. It renders as a
+       muted "Untitled" until you name it. */
+    if (node) {
       node.text = text;
       if (id === doc().root) doc().name = text || 'Untitled';
       save();
     }
     render();
   };
+
   const onBlur = () => done(true);
   const onKey = e => {
     e.stopPropagation();
@@ -2474,6 +2536,7 @@ function editNode(id) {
   };
   el.addEventListener('blur', onBlur);
   el.addEventListener('keydown', onKey);
+  el.addEventListener('input', onInput);
   setTimeout(keepEditVisible, 220);
 }
 
@@ -3139,10 +3202,47 @@ function escapeHtml(s) {
 /* =====================================================================
    SEARCH
    ===================================================================== */
+/* On a map of a few hundred nodes a list of results is not enough: you
+   need to see where the matches are. The query is kept so render() can
+   mark every matching node, and Enter walks through them. */
+let findQuery = '';
+let findRing = [];      // matching ids in the open document, in map order
+let findAt = -1;
+
+function nodeMatches(n, q) {
+  return ((n.text || '') + ' ' + (n.note || '')).toLowerCase().includes(q);
+}
+function refreshFindRing() {
+  findRing = [];
+  if (!findQuery) return;
+  const d = doc();
+  if (!d) return;
+  const walk = id => {
+    const n = d.nodes[id];
+    if (!n) return;
+    if (nodeMatches(n, findQuery)) findRing.push(id);
+    kidsOf(n).forEach(walk);
+  };
+  rootsOf().forEach(walk);
+}
+function jumpToNextMatch(back) {
+  if (!findRing.length) return;
+  findAt = (findAt + (back ? -1 : 1) + findRing.length) % findRing.length;
+  const id = findRing[findAt];
+  ancestors(id).forEach(a => { if (N(a)) N(a).collapsed = false; });
+  UI.selected = id;
+  save(); render(); centerOn(id);
+  toast(`Match ${findAt + 1} of ${findRing.length}`);
+}
+
 function runSearch(q) {
   const box = $('#searchResults');
   q = q.trim().toLowerCase();
-  if (!q) { box.hidden = true; box.innerHTML = ''; return; }
+  findQuery = q;
+  findAt = -1;
+  refreshFindRing();
+  if (!q) { box.hidden = true; box.innerHTML = ''; render(); return; }
+  render();   // light up the matches on the map
   const hits = [];
   S.order.forEach(did => {
     const d = S.docs[did];
@@ -3156,6 +3256,12 @@ function runSearch(q) {
   if (!hits.length) {
     box.innerHTML = '<div class="sr-empty">No matches. Try a shorter word.</div>';
     return;
+  }
+  if (findRing.length) {
+    const head = document.createElement('div');
+    head.className = 'sr-head';
+    head.textContent = `${findRing.length} in this map — press Enter to step through them`;
+    box.appendChild(head);
   }
   hits.slice(0, 40).forEach(h => {
     const el = document.createElement('div');
@@ -3479,6 +3585,10 @@ function wire() {
   $('#zoomFit').addEventListener('click', fitView);
 
   $('#search').addEventListener('input', e => runSearch(e.target.value));
+  $('#search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); jumpToNextMatch(e.shiftKey); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.target.value = ''; runSearch(''); e.target.blur(); }
+  });
 
   cycleTheme = () => {
     UI.theme = UI.theme === 'light' ? 'dark' : UI.theme === 'dark' ? 'system' : 'light';
@@ -3524,6 +3634,20 @@ function wire() {
       if (editing) setTimeout(keepEditVisible, 60); else onViewportChange();
     });
   }
+
+  /* A browser can discard a page without warning — a tab closed, a phone
+     switching apps, the OS reclaiming memory. Commit whatever is being
+     typed and write it out synchronously before that happens. These are
+     the events that actually fire on mobile; beforeunload often does not. */
+  const flushNow = () => {
+    try { if (commitEditor) commitEditor(); } catch (e) { }
+    persistNow();
+  };
+  window.addEventListener('pagehide', flushNow);
+  window.addEventListener('beforeunload', flushNow);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushNow();
+  });
 
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {

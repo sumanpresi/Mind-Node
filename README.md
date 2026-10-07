@@ -218,6 +218,37 @@ old data instead of guessing at it. If a device ever finds data written by a *ne
 version than the one running, it refuses to read it and says so, rather than reading it
 wrongly and saving the damage back.
 
+## Typing is never lost
+
+Text goes into the document as you type, not when you click away. If the phone
+keyboard is dismissed by a system gesture, the browser is backgrounded and
+reclaimed, or the tab is closed mid-word, what you typed is already saved. The
+app also writes to disk immediately when the page is hidden or closed, rather
+than waiting out its usual quarter-second pause.
+
+**Escape** undoes the edit you are in the middle of and puts the previous text
+back. On a node you have only just made and not yet named, Escape removes it —
+that is the way to cancel a mis-tap.
+
+**A node you leave blank is kept.** It shows as a muted *Untitled* until you name
+it, so tapping away never costs you a node you meant to make. Rename it any time
+with `F2`, or delete it like any other.
+
+## Finding your way around a large map
+
+Type in the search box and every matching node lights up on the map, so you can
+see where the matches are rather than only reading a list. The result list says
+how many are in the map you are looking at, and **Enter** steps through them one
+by one, centring each and unfolding whatever was hiding it. **Shift + Enter**
+goes back. **Escape** clears the search.
+
+A few hundred nodes is comfortable: around 150 ms to redraw at 300 nodes and
+190 ms at 500, measured on content the size of real names and designations.
+Beyond about a thousand a redraw starts to be noticeable, and the ways to keep a
+big map manageable are to fold branches you are not working on, split distinct
+subjects into separate documents, and use focus mode to dim everything except
+the branch in hand.
+
 ## Selecting several nodes at once
 
 Everything below works on one node or on a hundred.
