@@ -2842,6 +2842,41 @@ function keepEditVisible() {
   }
 }
 
+/* Is the person typing into something right now? A node being edited on
+   the map counts, and so does any field in a panel, sheet or dialog. */
+function isTyping() {
+  if (editing) return true;
+  const a = document.activeElement;
+  if (!a) return false;
+  return a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || !!a.isContentEditable;
+}
+
+/* Keep a panel field clear of the on-screen keyboard. The touch sheet is
+   anchored to the bottom of the window, so when the keyboard takes half
+   the screen the field being typed into can end up behind it. The sheet is
+   lifted by however much is covered, and the panel scrolled rather than
+   the page, so the rest of the sheet stays where it was. */
+function keepFieldVisible() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const covered = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+  const sheet = document.getElementById('sheet');
+  if (sheet) sheet.style.bottom = covered > 40 ? covered + 'px' : '';
+  const el = document.activeElement;
+  if (!el || !el.getBoundingClientRect || el === document.body) return;
+  const r = el.getBoundingClientRect();
+  const over = r.bottom - (vv.offsetTop + vv.height - 16);
+  if (over <= 0) return;
+  const box = el.closest ? el.closest('.sheet-body, #inspBody, .modal-body') : null;
+  if (box) box.scrollTop += over;
+  else if (el.scrollIntoView) { try { el.scrollIntoView({ block: 'center' }); } catch (e) { } }
+}
+/* the lift is only ever wanted while the keyboard is up */
+function dropSheetLift() {
+  const sheet = document.getElementById('sheet');
+  if (sheet && sheet.style.bottom) sheet.style.bottom = '';
+}
+
 /* ----------------------------- keyboard ---------------------------- */
 function keySetup() {
   document.addEventListener('keydown', e => {
@@ -3212,7 +3247,26 @@ function panelNote(id, w) {
 
 function panelMedia(id, w) {
   const n = N(id);
-  const refresh = () => { save(); render(); };
+  /* Update what actually changed instead of rebuilding the panel. A full
+     redraw cleared the search box and collapsed the list back to the top,
+     so adding a second marker meant searching for it all over again — and
+     on a phone it closed the keyboard too. */
+  const syncButtons = () => {
+    const on = markersOf(n);
+    w.querySelectorAll('.marker-btn').forEach(b => {
+      b.classList.toggle('is-on', on.includes(b.textContent));
+    });
+  };
+  const refresh = () => {
+    save();
+    drawCurrent();
+    syncButtons();
+    renderMap();
+  };
+  /* Tapping a marker must not pull focus off the search box: on a phone
+     that closes the keyboard, so adding a second marker would mean tapping
+     back into the box and typing the search again. */
+  const keepFocus = el => el.addEventListener('mousedown', e => e.preventDefault());
 
   /* ---- what this node already carries ---- */
   const current = document.createElement('div');
@@ -3241,6 +3295,7 @@ function panelMedia(id, w) {
       b.append(face, x);
       b.title = 'Remove this marker';
       b.setAttribute('aria-label', 'Remove marker ' + em);
+      keepFocus(b);
       b.addEventListener('click', () => { pushUndo(); toggleMarker(n, em); refresh(); });
       current.appendChild(b);
     });
@@ -3258,6 +3313,7 @@ function panelMedia(id, w) {
     b.textContent = em;
     b.title = entry ? entry.words : em;
     b.setAttribute('aria-label', entry ? entry.words.split(' ')[0] : em);
+    keepFocus(b);
     b.addEventListener('click', () => { pushUndo(); toggleMarker(n, em); refresh(); });
     quick.appendChild(b);
   });
@@ -3304,6 +3360,7 @@ function panelMedia(id, w) {
         b.textContent = item.emoji;
         b.title = item.words;
         b.setAttribute('aria-label', item.words.split(' ')[0]);
+        keepFocus(b);
         b.addEventListener('click', () => { pushUndo(); toggleMarker(n, item.emoji); refresh(); });
         row.appendChild(b);
       });
@@ -3406,9 +3463,11 @@ function renderSheet() {
   const id = UI.selected;
   if (!narrow || !id || !N(id) || UI.view !== 'map' || editing) {
     host.hidden = true; host.innerHTML = '';
+    dropSheetLift();
     return;
   }
   host.hidden = false;
+  if (!isTyping()) dropSheetLift();     // no keyboard up, so sit on the bottom
   host.innerHTML = '';
   host.classList.toggle('open', !!UI.sheetTab);
 
@@ -3990,24 +4049,36 @@ function wire() {
     if (b && !b.disabled) doAct(b.dataset.act);
   });
 
+  /* Anything being typed into must never be torn down. On a phone the
+     keyboard opening is itself a viewport resize, so redrawing in response
+     to it would destroy the very field the keyboard was opened for: the
+     field vanishes, focus is lost, and the keyboard closes again before a
+     single letter can be typed. That made the marker search, the note and
+     every other panel field impossible to use on a phone. Resizing is
+     still handled — the relayout simply waits until typing is finished,
+     and the keyboard going away is another resize, which runs it. */
   let rt = null;
   const onViewportChange = () => {
     hideSideTip();
     /* unfolding the Fold makes the rail viable again; the stored
-       preference is untouched, only what fits is recomputed */
+       preference is untouched, only what fits is recomputed. These only
+       set attributes, so they are safe while a field has focus. */
     applySidebar();
     syncScrim();
     clearTimeout(rt);
     rt = setTimeout(() => {
-      if (editing) keepEditVisible();
-      else render();
+      if (editing) { keepEditVisible(); return; }
+      if (isTyping()) return;
+      render();
     }, 140);
   };
   window.addEventListener('resize', () => { closeContextMenu(); onViewportChange(); });
   window.addEventListener('orientationchange', onViewportChange);
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => {
-      if (editing) setTimeout(keepEditVisible, 60); else onViewportChange();
+      if (editing) { setTimeout(keepEditVisible, 60); return; }
+      if (isTyping()) { keepFieldVisible(); return; }
+      onViewportChange();
     });
   }
 

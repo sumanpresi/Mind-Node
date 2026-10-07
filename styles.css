@@ -744,15 +744,19 @@ button{cursor:pointer;background:none;border:0}
   padding-bottom:var(--safe-b);
   display:flex;flex-direction:column;max-height:62dvh;
 }
-.sheet-head{display:flex;align-items:center;gap:4px;padding:6px 10px;border-bottom:1px solid transparent}
+/* The head, the title and the foot must keep their own height. Without
+   this they are flex children of a height-capped column and shrink to fit,
+   which sliced the node's name in half across the middle of the letters. */
+.sheet-head{display:flex;align-items:center;gap:4px;padding:6px 10px;border-bottom:1px solid transparent;flex:0 0 auto}
 #sheet.open .sheet-head{border-bottom-color:var(--line)}
 .sheet-title{
-  padding:10px 16px 2px;font-size:13px;font-weight:800;letter-spacing:-.01em;
+  flex:0 0 auto;
+  padding:10px 16px 2px;font-size:13px;font-weight:800;letter-spacing:-.01em;line-height:1.35;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
-.sheet-body{flex:1;overflow:auto;padding:10px 16px 4px;-webkit-overflow-scrolling:touch}
+.sheet-body{flex:1 1 auto;min-height:0;overflow:auto;padding:10px 16px 4px;-webkit-overflow-scrolling:touch}
 .sheet-body .grp{margin-bottom:14px}
-.sheet-foot{display:flex;gap:4px;padding:8px 10px;border-top:1px solid var(--line);background:var(--surface-2)}
+.sheet-foot{display:flex;gap:4px;padding:8px 10px;border-top:1px solid var(--line);background:var(--surface-2);flex:0 0 auto}
 .sheet-foot button{flex:1;height:42px;border-radius:10px;display:grid;place-items:center;color:var(--muted)}
 .sheet-foot button:hover{background:var(--surface)}
 .sheet-foot .danger-btn{color:var(--danger)}
