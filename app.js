@@ -343,11 +343,16 @@ let pendingFit = false;
 let P = {};                 // id -> {x,y,w,h}
 let editing = null;         // node id being text-edited
 let connectFrom = null;     // pending connection source
+let selConn = null;         // the connection currently selected, if any
+let wayDrag = null;         // a waypoint being dragged
+let linkDrag = null;        // dragging from one node to another to connect
 let dragOffset = null;      // {ids:Set, dx, dy}
 let undoStack = [];
 let redoStack = [];
 let clipboard = null;
 let lastTap = { id: null, t: 0 };
+let lastConnTap = { id: null, t: 0 };   // for double-tap to name a connection
+let lastWayTap = { id: null, t: 0 };    // for double-tap to straighten one
 let deletedDocs = {};       // id -> time it was deleted, so sync does not resurrect it
 let contentSigs = {};       // id -> fingerprint, so panning does not count as an edit
 let nodeSigs = {};          // id -> { nodeId: fingerprint }, for the per-node stamps below
@@ -1076,7 +1081,7 @@ function render() {
   $('#connectBtn').classList.toggle('is-on', !!connectFrom);
   $('#connectHint').hidden = !connectFrom && !moveInto;
   if (moveInto) $('#connectHint').textContent = `Tap the node these ${marked.size || 1} should sit under.`;
-  else if (connectFrom) $('#connectHint').textContent = 'Pick the first node, then the second.';
+  else if (connectFrom) $('#connectHint').textContent = 'Drag from one node to another, or tap one and then the other.';
   syncSelBar();
   $('#canvas').hidden = UI.view !== 'map';
   $('#zoombar').hidden = UI.view !== 'map';
@@ -1085,6 +1090,8 @@ function render() {
 
   renderDocList();
   if (UI.view === 'map') renderMap(); else renderOutline();
+  /* after the map, so the bar can be placed against the drawn curve */
+  if (!document.querySelector('#connBar .conn-input')) renderConnBar();
   renderInspector();
   renderSheet();
 }
@@ -1209,7 +1216,7 @@ function duplicateDoc(id) {
 }
 
 function openDoc(id) {
-  S.active = id; UI.selected = null; connectFrom = null; clearMarked(); findAt = -1; refreshFindRing();
+  S.active = id; UI.selected = null; connectFrom = null; selConn = null; clearMarked(); findAt = -1; refreshFindRing();
   if (window.innerWidth <= 900 && sideMode() === 'wide') setSide('hidden', { quiet: true });
   const needsFit = !S.docs[id].cam;
   save(); render();
@@ -1285,6 +1292,7 @@ function renderMap() {
 
   buildHandles();
   applyDimming(visible, els);
+  lastVisible = visible;
   drawEdges(visible);
   applyCam();
   positionHandles();
@@ -1691,21 +1699,108 @@ function drawEdges(visible) {
     eL.appendChild(path);
   });
 
+  const SVG = 'http://www.w3.org/2000/svg';
+  const mk = (tag, cls) => {
+    const el = document.createElementNS(SVG, tag);
+    el.setAttribute('class', cls);
+    return el;
+  };
   d.connections.forEach(c => {
     if (!P[c.a] || !P[c.b]) return;
-    const a = box(c.a), b = box(c.b);
-    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    p.setAttribute('d', curve(a, b, true));
-    p.setAttribute('class', 'xlink');
+    const g = connGeom(c);
+    const dAttr = connPath(g);
+    const on = selConn === c.id;
+
+    /* A two-pixel line is almost impossible to hit with a fingertip, so an
+       invisible wide one is laid underneath to catch the tap. */
+    const hit = mk('path', 'xlink-hit');
+    hit.setAttribute('d', dAttr);
+    hit.dataset.conn = c.id;
+    lL.appendChild(hit);
+
+    const p = mk('path', 'xlink' + (on ? ' is-on' : ''));
+    p.setAttribute('d', dAttr);
     p.dataset.conn = c.id;
-    p.addEventListener('click', () => {
-      pushUndo();
-      doc().connections = doc().connections.filter(x => x.id !== c.id);
-      save(); render(); toast('Connection removed');
-    });
     lL.appendChild(p);
+
+    if (c.title) {
+      const t = mk('text', 'xlink-title');
+      t.setAttribute('x', g.at.x);
+      t.setAttribute('y', g.at.y - (on ? 14 : 5));
+      t.setAttribute('text-anchor', 'middle');
+      t.textContent = c.title;
+      t.dataset.conn = c.id;
+      lL.appendChild(t);
+    }
+
+    if (on) {
+      /* the waypoint: drag it to shape the curve, double-click to straighten */
+      const grab = mk('circle', 'way-hit');
+      grab.setAttribute('cx', g.at.x); grab.setAttribute('cy', g.at.y);
+      grab.setAttribute('r', 17);
+      grab.dataset.way = c.id;
+      lL.appendChild(grab);
+
+      const dot = mk('circle', 'way');
+      dot.setAttribute('cx', g.at.x); dot.setAttribute('cy', g.at.y);
+      dot.setAttribute('r', 6.5);
+      dot.dataset.way = c.id;
+      lL.appendChild(dot);
+    }
   });
 }
+/* ======================= connections ===============================
+   A connection is {id, a, b}, and once it has been shaped or named it
+   also carries a title and a waypoint. The waypoint is stored as two
+   fractions of the straight line between the two nodes — how far along
+   it (slide) and how far out from it (bow) — rather than as a position
+   on the canvas, so the curve keeps the shape you gave it as the nodes
+   move around. A connection saved before any of this existed has
+   neither, and simply draws with the gentle arc it always had.
+   =================================================================== */
+const CONN_BOW = 0.16;              // the arc a new connection is born with
+const BOW_FLAT = 0.012;             // anything this straight counts as straight
+const bowOf = c => (c.bow == null ? CONN_BOW : c.bow);
+const slideOf = c => (c.slide == null ? 0 : c.slide);
+const connIsStraight = c => Math.abs(bowOf(c)) < BOW_FLAT && Math.abs(slideOf(c)) < BOW_FLAT;
+
+/* Everything needed to draw one connection, in world coordinates: the two
+   ends, the control point, and the point on the curve the waypoint sits
+   on — which for a quadratic is halfway between the chord's middle and
+   the control point. */
+function connGeom(c) {
+  const a = box(c.a), b = box(c.b);
+  const A = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+  const B = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  const dx = B.x - A.x, dy = B.y - A.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;         // along the line
+  const px = dy / len, py = -dx / len;        // across it
+  const mid = { x: (A.x + B.x) / 2, y: (A.y + B.y) / 2 };
+  const bow = bowOf(c), slide = slideOf(c);
+  const ctrl = {
+    x: mid.x + px * bow * len + ux * slide * len,
+    y: mid.y + py * bow * len + uy * slide * len
+  };
+  const at = { x: (mid.x + ctrl.x) / 2, y: (mid.y + ctrl.y) / 2 };
+  return { A, B, mid, ctrl, at, len, ux, uy, px, py };
+}
+const connPath = g => `M${g.A.x} ${g.A.y} Q${g.ctrl.x} ${g.ctrl.y} ${g.B.x} ${g.B.y}`;
+
+/* Put the waypoint at a point on the canvas, and read back the two
+   fractions that will reproduce it. */
+function setConnWaypoint(c, world) {
+  const g = connGeom(c);
+  const cx = 2 * world.x - g.mid.x, cy = 2 * world.y - g.mid.y;
+  const vx = cx - g.mid.x, vy = cy - g.mid.y;
+  /* Neither direction is limited. A waypoint that stops following your
+     finger feels broken, and an extreme shape is one you asked for and can
+     undo with a double-click on the same handle. */
+  c.bow = (vx * g.px + vy * g.py) / g.len;
+  c.slide = (vx * g.ux + vy * g.uy) / g.len;
+}
+function straightenConn(c) { c.bow = 0; c.slide = 0; }
+
 function curve(a, b, arc) {
   const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 }, bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
   const dx = bc.x - ac.x, dy = bc.y - ac.y;
@@ -1726,6 +1821,171 @@ function curve(a, b, arc) {
   if (kind === 'straight') return `M${ac.x} ${y1} L${bc.x} ${y2}`;
   if (kind === 'elbow') return `M${ac.x} ${y1} V${m} H${bc.x} V${y2}`;
   return `M${ac.x} ${y1} C${ac.x} ${m} ${bc.x} ${m} ${bc.x} ${y2}`;
+}
+
+/* Redraw just the lines. Shaping a connection moves nothing else, and a
+   full redraw on every pointer move would make the drag feel heavy. */
+let lastVisible = [];
+function drawEdgesOnly() {
+  if (UI.view !== 'map') return;
+  drawEdges(lastVisible);
+  const bar = document.getElementById('connBar');
+  const live = selConn && theConn(selConn);
+  if (bar && !bar.hidden && live) placeConnBar(bar, live);
+}
+
+/* The line that follows the pointer while a connection is being drawn. */
+function drawLinkPreview(fromId, world) {
+  const lL = $('#linkLayer');
+  if (!lL || !P[fromId]) return;
+  const a = box(fromId);
+  const A = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
+  let p = lL.querySelector('.xlink-draft');
+  if (!p) {
+    p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('class', 'xlink-draft');
+    lL.appendChild(p);
+  }
+  p.setAttribute('d', `M${A.x} ${A.y} L${world.x} ${world.y}`);
+}
+function clearLinkPreview() {
+  const p = document.querySelector('#linkLayer .xlink-draft');
+  if (p) p.remove();
+  $$('#nodes .node.is-link-target').forEach(el => el.classList.remove('is-link-target'));
+}
+
+/* Where a point on the map sits on the screen. */
+function toScreen(wx, wy) {
+  const c = cam(), r = $('#canvas').getBoundingClientRect();
+  return { x: r.left + c.x + wx * c.s, y: r.top + c.y + wy * c.s };
+}
+
+/* ------------------- the selected connection's bar -----------------
+   A small bar that follows the selected connection, offering the few
+   things worth doing to it. It lives on top of everything rather than
+   inside the map, so it stays a comfortable size at any zoom. */
+function connBarEl() {
+  let el = document.getElementById('connBar');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'connBar';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function hideConnBar() {
+  const el = document.getElementById('connBar');
+  if (el) { el.hidden = true; el.innerHTML = ''; }
+}
+function theConn(id) { return doc().connections.find(c => c.id === id) || null; }
+
+function renderConnBar() {
+  const c = selConn && theConn(selConn);
+  if (!c || UI.view !== 'map' || !P[c.a] || !P[c.b]) { hideConnBar(); return; }
+  const el = connBarEl();
+  el.hidden = false;
+  el.innerHTML = '';
+
+  const btn = (label, title, fn, cls) => {
+    const b = document.createElement('button');
+    b.className = 'conn-btn' + (cls ? ' ' + cls : '');
+    b.textContent = label;
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.addEventListener('click', ev => { ev.stopPropagation(); fn(); });
+    return b;
+  };
+  el.appendChild(btn(c.title ? 'Edit title' : 'Add title', 'Name this connection', () => editConnTitle(c.id)));
+  if (!connIsStraight(c)) el.appendChild(btn('Straighten', 'Make this connection straight', () => {
+    pushUndo(); straightenConn(c); save(); render(); toast('Straightened');
+  }));
+  el.appendChild(btn('Remove', 'Remove this connection', () => removeConn(c.id), 'danger'));
+
+  placeConnBar(el, c);
+  armConnBar(el);
+}
+/* Keep the bar on the waypoint and on the screen — but clear of the
+   finger that is selecting the connection. A touch lands with the
+   fingertip below what it is pointing at, so the bar goes above. */
+function placeConnBar(el, c) {
+  const g = connGeom(c);
+  const s = toScreen(g.at.x, g.at.y);
+  const w = el.offsetWidth || 220, h = el.offsetHeight || 38;
+  const pad = 8;
+  const touch = matchMedia && matchMedia('(pointer:coarse)').matches;
+  const gap = touch ? 46 : 22;
+  const x = s.x - w / 2;
+  let y = touch ? s.y - h - gap : s.y + gap;
+  if (y < pad) y = s.y + gap;                               // no room above
+  if (y + h + pad > window.innerHeight) y = s.y - h - gap;  // nor below
+  el.style.left = clamp(x, pad, Math.max(pad, window.innerWidth - w - pad)) + 'px';
+  el.style.top = clamp(y, pad, Math.max(pad, window.innerHeight - h - pad)) + 'px';
+}
+
+/* The bar appears under the very gesture that selected the connection, so
+   for a moment the release of that tap would land on whichever button had
+   just been put there — "Remove", as it happened. Nothing on it can be
+   pressed until the hand that opened it has had time to lift. */
+let connBarArm = null;
+function armConnBar(el) {
+  clearTimeout(connBarArm);
+  el.style.pointerEvents = 'none';
+  connBarArm = setTimeout(() => { el.style.pointerEvents = ''; }, 350);
+}
+
+/* Naming a connection. The field is placed on the connection itself so it
+   is obvious what is being named. */
+function editConnTitle(id) {
+  const c = theConn(id);
+  if (!c) return;
+  selConn = id;
+  const el = connBarEl();
+  el.hidden = false;
+  el.innerHTML = '';
+  const input = document.createElement('input');
+  input.className = 'conn-input';
+  input.value = c.title || '';
+  input.placeholder = 'Name this connection';
+  input.setAttribute('aria-label', 'Connection title');
+  el.appendChild(input);
+
+  let done = false;
+  const finish = keep => {
+    if (done) return;
+    done = true;
+    const live = theConn(id);
+    if (keep && live) {
+      const text = input.value.trim();
+      if ((live.title || '') !== text) {
+        pushUndo();
+        if (text) live.title = text; else delete live.title;
+        save();
+      }
+    }
+    hideConnBar();          // so the redraw puts the buttons back
+    render();
+  };
+  input.addEventListener('keydown', ev => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+  });
+  input.addEventListener('blur', () => finish(true));
+  placeConnBar(el, c);
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+}
+
+function removeConn(id) {
+  pushUndo();
+  doc().connections = doc().connections.filter(x => x.id !== id);
+  if (selConn === id) selConn = null;
+  save(); render(); toast('Connection removed');
+}
+function selectConn(id) {
+  selConn = id;
+  UI.selected = null;
+  clearMarked();
+  render();
 }
 
 /* --------------------- focus mode + tag highlight ------------------ */
@@ -1775,6 +2035,12 @@ function applyCam() {
   camSettle = setTimeout(() => world.classList.remove('is-moving'), 180);
   const z = $('#zoomFit');
   if (z) z.textContent = Math.round(c.s * 100) + '%';
+  /* the connection bar is pinned to a point on the map, so it travels with it */
+  if (selConn) {
+    const bar = document.getElementById('connBar');
+    const live = theConn(selConn);
+    if (bar && !bar.hidden && live && P[live.a] && P[live.b]) placeConnBar(bar, live);
+  }
 }
 function zoomBy(f, px, py) {
   const c = cam(), s2 = clamp(c.s * f, 0.2, 3);
@@ -1818,11 +2084,17 @@ function cancelGestures() {
   if (band) { band = null; hideBand(); clearPreview(); }
   pendingCtx = null;
   pan = null; pinch = null; pointers.clear();
+  wayDrag = null;
+  if (linkDrag) { linkDrag = null; clearLinkPreview(); }
   if (nodeDrag) { nodeDrag = null; dragOffset = null; render(); }
 }
 
 function canvasSetup() {
   const canvas = $('#canvas');
+  /* Capturing a pointer that has already been let go throws, which would
+     abandon the rest of the gesture. Nothing depends on the capture
+     succeeding, so a failure is simply ignored. */
+  const grabPointer = id => { try { canvas.setPointerCapture(id); } catch (e) { } };
 
   canvas.addEventListener('pointerdown', e => {
     const foldBtn = e.target.closest('[data-fold]');
@@ -1835,8 +2107,56 @@ function canvasSetup() {
     const linkCtl = e.target.closest('[data-linkbtn], [data-linkpeek]');
     /* Controls sitting on top of the canvas must not start a pan. Capturing
        the pointer would send their click to the canvas instead of to them. */
-    const overlay = e.target.closest('#zoombar, #ctx, .hint, #linkPop');
+    const overlay = e.target.closest('#zoombar, #ctx, .hint, #linkPop, #connBar');
     if (foldBtn || taskBtn || noteIc || linkIc || urlIc || addBtn || checkCtl || linkCtl || overlay) return;
+
+    /* A phone browser nudges a touch towards whatever it decides you meant,
+       and anywhere near a node that means the node — even when the finger
+       landed exactly on a connection running past it. Where the actual
+       point is on a connection, that is what was meant. */
+    let aim = e.target;
+    if (e.pointerType !== 'mouse' && typeof document.elementFromPoint === 'function') {
+      const exact = document.elementFromPoint(e.clientX, e.clientY);
+      if (exact && exact.closest && exact.closest('[data-conn], [data-way]')) aim = exact;
+    }
+
+    /* ---- the selected connection's waypoint ---- */
+    const wayEl = aim.closest('[data-way]');
+    if (wayEl && !editing) {
+      const c = theConn(wayEl.dataset.way);
+      if (c) {
+        const now = Date.now();
+        /* a second tap on the waypoint pulls the connection straight */
+        if (lastWayTap.id === c.id && now - lastWayTap.t < 380) {
+          lastWayTap = { id: null, t: 0 };
+          pushUndo(); straightenConn(c); save(); render(); toast('Straightened');
+          return;
+        }
+        lastWayTap = { id: c.id, t: now };
+        grabPointer(e.pointerId);
+        wayDrag = { id: c.id, moved: false };
+        e.preventDefault();
+        return;
+      }
+    }
+
+    /* ---- the connection itself ---- */
+    const connEl = aim.closest('[data-conn]');
+    if (connEl && !editing && !connectFrom) {
+      const id = connEl.dataset.conn;
+      const now = Date.now();
+      if (lastConnTap.id === id && now - lastConnTap.t < 380) {
+        lastConnTap = { id: null, t: 0 };
+        selConn = id; render(); editConnTitle(id);
+        return;
+      }
+      lastConnTap = { id, t: now };
+      selectConn(id);
+      e.preventDefault();
+      return;
+    }
+    /* anywhere else puts the selected connection down */
+    if (selConn && !aim.closest('[data-conn], [data-way]')) { selConn = null; hideConnBar(); }
     /* While a node is being typed into, the canvas stays put. The browser
        still blurs the field, which commits the text. */
     if (editing) return;
@@ -1851,7 +2171,7 @@ function canvasSetup() {
         additive: e.shiftKey || e.ctrlKey || e.metaKey,
         onNode: over ? over.dataset.id : null
       };
-      canvas.setPointerCapture(e.pointerId);
+      grabPointer(e.pointerId);
       e.preventDefault();
       return;
     }
@@ -1871,7 +2191,7 @@ function canvasSetup() {
        still open a context menu — for that child, not the parent. */
     const checkRow = e.target.closest('.check-row:not(.check-add-row)');
     const checkRowTxt = checkRow ? checkRow.querySelector('[data-txt]') : null;
-    canvas.setPointerCapture(e.pointerId);
+    grabPointer(e.pointerId);
 
     /* touch and pen: hold still for half a second to get the menu */
     if (e.pointerType !== 'mouse') {
@@ -1897,6 +2217,11 @@ function canvasSetup() {
     }
     if (checkRow) {
       // no drag, no pan — just wait to see if this becomes a long-press or a plain tap
+    } else if (nodeEl && !editing && connectFrom) {
+      /* With the link tool armed, a node is a place to draw from rather
+         than something to move: drag across to the other node, or let go
+         without moving and tap the second node instead. */
+      linkDrag = { from: nodeEl.dataset.id, sx: e.clientX, sy: e.clientY, moved: false, target: null };
     } else if (nodeEl && !editing) {
       const id = nodeEl.dataset.id;
       const additive = e.shiftKey || e.ctrlKey || e.metaKey;
@@ -1911,6 +2236,28 @@ function canvasSetup() {
   });
 
   canvas.addEventListener('pointermove', e => {
+    /* shaping a connection: the waypoint follows the pointer */
+    if (wayDrag) {
+      const c = theConn(wayDrag.id);
+      if (!c) { wayDrag = null; return; }
+      if (!wayDrag.moved) {
+        wayDrag.moved = true;
+        pushUndo();                       // one undo step for the whole drag
+      }
+      setConnWaypoint(c, toWorld(e.clientX, e.clientY));
+      drawEdgesOnly();
+      return;
+    }
+    /* drawing a connection from one node to another */
+    if (linkDrag) {
+      if (!linkDrag.moved && Math.hypot(e.clientX - linkDrag.sx, e.clientY - linkDrag.sy) < 5) return;
+      linkDrag.moved = true;
+      const over = hitNode(e.clientX, e.clientY, new Set([linkDrag.from]));
+      linkDrag.target = over;
+      $$('#nodes .node').forEach(el => el.classList.toggle('is-link-target', el.dataset.id === over));
+      drawLinkPreview(linkDrag.from, toWorld(e.clientX, e.clientY));
+      return;
+    }
     if (band) {
       band.cx = e.clientX; band.cy = e.clientY;
       if (!band.moved && Math.hypot(e.clientX - band.sx, e.clientY - band.sy) > 6) {
@@ -1966,6 +2313,35 @@ function canvasSetup() {
     clearTimeout(lpTimer); lpTimer = null;
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
+
+    if (wayDrag) {
+      const moved = wayDrag.moved;
+      wayDrag = null;
+      if (moved) { save(); render(); }
+      return;
+    }
+
+    if (linkDrag) {
+      const ld = linkDrag; linkDrag = null;
+      clearLinkPreview();
+      /* let go without moving: this was a tap, so it means the same as it
+         always did — pick this node as one end of the connection */
+      if (!ld.moved) { handleNodeTap(ld.from, false); return; }
+      if (ld.target && ld.target !== ld.from) {
+        pushUndo();
+        const c = { id: uid(), a: ld.from, b: ld.target };
+        doc().connections.push(c);
+        connectFrom = null;
+        selConn = c.id;
+        save(); render();
+        toast('Connection added — drag the dot to curve it');
+      } else {
+        connectFrom = null;
+        render();
+        toast('Let go on another node to connect them');
+      }
+      return;
+    }
 
     if (band) {
       const b = band; band = null;
@@ -2197,8 +2573,10 @@ function handleNodeTap(id, additive) {
   if (connectFrom) {
     if (connectFrom !== id) {
       pushUndo();
-      doc().connections.push({ id: uid(), a: connectFrom, b: id });
-      toast('Connection added');
+      const made = { id: uid(), a: connectFrom, b: id };
+      doc().connections.push(made);
+      selConn = made.id;                  // ready to curve or name straight away
+      toast('Connection added — drag the dot to curve it');
     }
     connectFrom = null; save(); render(); return;
   }
@@ -2912,6 +3290,7 @@ function keySetup() {
     if (e.key === '/') { e.preventDefault(); setSide('wide'); $('#search').focus(); return; }
     if (e.key === 'Escape') {
       if ($('#ctx')) { closeContextMenu(); return; }
+      if (selConn) { selConn = null; hideConnBar(); render(); return; }
       if (moveInto) { moveInto = false; render(); return; }
       if (marked.size) { clearMarked(); render(); return; }
       if ($('#linkPop')) { closeLinkPopover(); return; }
@@ -2920,6 +3299,11 @@ function keySetup() {
       else if (UI.highlightTag) { UI.highlightTag = null; render(); }
       else { UI.selected = null; render(); }
       return;
+    }
+    /* with a connection picked, the keys act on it rather than on a node */
+    if (selConn) {
+      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeConn(selConn); return; }
+      if (e.key === 'Enter' || e.key === 'F2') { e.preventDefault(); editConnTitle(selConn); return; }
     }
     const id = UI.selected;
     if (!id) return;
@@ -3608,20 +3992,30 @@ function connectionList() {
   if (!d.connections.length) {
     const p = document.createElement('div');
     p.className = 'help';
-    p.textContent = 'Pick the link tool in the toolbar, then tap two nodes to draw a relationship that ignores the hierarchy.';
+    p.textContent = 'Pick the link tool in the toolbar, then drag from one node to another — or tap one and then the other. ' +
+      'A connection drawn this way ignores the hierarchy.';
     wrap.appendChild(p);
     return wrap;
   }
   d.connections.forEach(c => {
     const line = document.createElement('div');
-    line.className = 'tag-line';
+    line.className = 'tag-line' + (selConn === c.id ? ' is-on' : '');
     const a = d.nodes[c.a], b = d.nodes[c.b];
     line.innerHTML = `<span class="nm"></span><span class="ct">✕</span>`;
-    line.querySelector('.nm').textContent = `${a ? a.text : '?'} → ${b ? b.text : '?'}`;
-    line.addEventListener('click', () => {
-      pushUndo();
-      d.connections = d.connections.filter(x => x.id !== c.id);
+    const pair = `${a ? a.text || 'Untitled' : '?'} → ${b ? b.text || 'Untitled' : '?'}`;
+    line.querySelector('.nm').textContent = c.title ? `${c.title} — ${pair}` : pair;
+    line.title = pair;
+    /* the row selects; only the ✕ removes, so a stray tap cannot delete */
+    line.addEventListener('click', ev => {
+      if (ev.target.closest('.ct')) {
+        ev.stopPropagation();
+        removeConn(c.id);
+        return;
+      }
+      if (UI.view !== 'map') { UI.view = 'map'; }
+      selConn = c.id;
       save(); render();
+      if (P[c.a]) centerOn(c.a);
     });
     wrap.appendChild(line);
   });

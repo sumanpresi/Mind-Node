@@ -346,8 +346,48 @@ button{cursor:pointer;background:none;border:0}
 #nodes{position:absolute;left:0;top:0;width:0;height:0}
 
 .edge{fill:none;stroke-linecap:round}
-.xlink{fill:none;stroke:var(--link);stroke-width:2;stroke-dasharray:6 5;marker-end:url(#arrow);pointer-events:stroke;cursor:pointer}
-.xlink:hover{stroke-width:3.5}
+.xlink{fill:none;stroke:var(--link);stroke-width:2;stroke-dasharray:6 5;marker-end:url(#arrow);pointer-events:none}
+/* An invisible, generously wide copy of the line underneath, so it can be
+   hit with a fingertip rather than only with a mouse. */
+.xlink-hit{fill:none;stroke:transparent;stroke-width:22;pointer-events:stroke;cursor:pointer}
+.xlink-hit:hover + .xlink{stroke-width:3.4}
+.xlink.is-on{stroke-width:3.4;stroke-dasharray:none}
+/* the line being drawn from one node towards another */
+.xlink-draft{fill:none;stroke:var(--link);stroke-width:2.4;stroke-dasharray:4 6;opacity:.75;pointer-events:none}
+.node.is-link-target{box-shadow:0 0 0 3px var(--link), var(--shadow)}
+
+/* the waypoint that shapes a connection */
+.way{fill:var(--paper);stroke:var(--link);stroke-width:2.5;cursor:grab}
+.way-hit{fill:transparent;cursor:grab;pointer-events:all}
+.way-hit:active, .way:active{cursor:grabbing}
+
+.xlink-title{
+  font-size:11.5px;font-weight:700;fill:var(--link);
+  paint-order:stroke;stroke:var(--paper);stroke-width:4.5;stroke-linejoin:round;
+  pointer-events:none;-webkit-user-select:none;user-select:none;
+}
+
+/* the bar that follows the selected connection */
+#connBar{
+  position:fixed;z-index:60;display:flex;align-items:center;gap:4px;
+  background:var(--surface);border:1px solid var(--line);border-radius:11px;
+  box-shadow:0 10px 28px rgba(20,20,43,.2);padding:4px;
+}
+.conn-btn{
+  border-radius:8px;padding:7px 11px;font-size:12.5px;font-weight:700;
+  color:var(--text);white-space:nowrap;
+}
+.conn-btn:hover{background:var(--surface-2)}
+.conn-btn.danger{color:var(--danger)}
+.conn-input{
+  width:min(58vw,240px);border:1px solid var(--line);border-radius:8px;
+  padding:7px 10px;font-size:13px;background:var(--paper);color:var(--text);
+}
+.conn-input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+@media (pointer:coarse){
+  .conn-btn{padding:10px 13px;font-size:13.5px}
+  .xlink-hit{stroke-width:30}
+}
 .dim{opacity:.16}
 
 /* ---- nodes ---- */

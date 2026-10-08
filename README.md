@@ -157,8 +157,22 @@ open it.
 **Visual tags** — create tags in the inspector, then use the sun icon beside a tag to
 spotlight everything carrying it and fade the rest.
 
-**Connections** — select a node, press the link tool, then tap a second node to draw a
-relationship that ignores the hierarchy. Click a connection line to remove it.
+**Connections** — once the main structure is there, you will notice relationships between
+ideas on different branches. A connection draws the link without touching the hierarchy.
+
+To make one: select a node, press the link tool, then tap the second node. With a mouse
+you can instead drag straight from one node to the other — a line follows the pointer and
+the node you are over is picked out, so you can see where it will land before you let go.
+
+To change one: click or tap the connection to select it. A waypoint appears in the middle
+— drag it to give the line the curve you want, and double-click or double-tap it to pull
+the line straight again. The bar that appears offers the same, along with a title and
+removal. Double-clicking the connection itself goes straight to naming it, and the name is
+drawn along the line. Connections are listed in the Data panel, where a row selects the
+connection on the map and the ✕ removes it.
+
+The shape is remembered as a proportion of the line rather than as a spot on the canvas,
+so a curve you set keeps its shape as the nodes move around.
 
 **Link documents** — point a node at another document. It gets a 🔗 you can tap to jump
 straight there.
