@@ -889,6 +889,9 @@ function hydrate(raw) {
     deletedDocs = data.deleted || {};
     Object.values(S.docs).forEach(d => {
       d.connections = d.connections || []; d.tags = d.tags || [];
+      d.conngone = d.conngone || {};
+      // Filter out any connections that have been marked as deleted
+      d.connections = d.connections.filter(c => !d.conngone[c.id]);
       Object.values(d.nodes).forEach(n => { n.tags = n.tags || []; });
       const fp = docFingerprint(d);
       contentSigs[d.id] = fp.sig;
@@ -1729,6 +1732,8 @@ function drawEdges(visible) {
     return el;
   };
   d.connections.forEach(c => {
+    // Skip connections that have been explicitly deleted (tombstone tracking)
+    if (d.conngone && d.conngone[c.id]) return;
     if (!P[c.a] || !P[c.b]) return;
     const g = connGeom(c);
     const dAttr = connPath(g);
@@ -1995,6 +2000,11 @@ function renderConnBar() {
     return b;
   };
   el.appendChild(btn(c.title ? 'Edit title' : 'Add title', 'Name this connection', () => editConnTitle(c.id)));
+  if (c.note) {
+    el.appendChild(btn('📝 Edit note', 'Edit the note on this connection', () => editConnNote(c.id)));
+  } else {
+    el.appendChild(btn('📝 Add note', 'Add a note to this connection', () => editConnNote(c.id)));
+  }
   if (!connIsStraight(c)) el.appendChild(btn('Straighten', 'Make this connection straight', () => {
     pushUndo(); straightenConn(c); save(); render(); toast('Straightened');
   }));
@@ -2074,10 +2084,57 @@ function editConnTitle(id) {
   setTimeout(() => { input.focus(); input.select(); }, 0);
 }
 
+/* Add or edit a note on a connection */
+function editConnNote(id) {
+  const c = theConn(id);
+  if (!c) return;
+  selConn = id;
+  const el = connBarEl();
+  el.hidden = false;
+  el.innerHTML = '';
+  const textarea = document.createElement('textarea');
+  textarea.className = 'conn-note';
+  textarea.value = c.note || '';
+  textarea.placeholder = 'Add a note to this connection…';
+  textarea.setAttribute('aria-label', 'Connection note');
+  textarea.style.cssText = 'width: 100%; min-height: 60px; padding: 8px; border: 1px solid var(--accent); border-radius: 4px; font-family: inherit; font-size: 13px; resize: none;';
+  el.appendChild(textarea);
+
+  let done = false;
+  const finish = keep => {
+    if (done) return;
+    done = true;
+    const live = theConn(id);
+    if (keep && live) {
+      const text = textarea.value.trim();
+      if ((live.note || '') !== text) {
+        pushUndo();
+        if (text) live.note = text; else delete live.note;
+        save();
+      }
+    }
+    hideConnBar();
+    render();
+  };
+  textarea.addEventListener('keydown', ev => {
+    if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+  });
+  textarea.addEventListener('blur', () => finish(true));
+  el.style.cssText = 'position: fixed; z-index: 100; background: var(--bg); border: 1px solid var(--accent); border-radius: 8px; padding: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);';
+  placeConnBar(el, c);
+  setTimeout(() => { textarea.focus(); }, 0);
+}
+
 function removeConn(id) {
   pushUndo();
-  doc().connections = doc().connections.filter(x => x.id !== id);
+  const d = doc();
+  d.connections = d.connections.filter(x => x.id !== id);
   if (selConn === id) selConn = null;
+
+  // Track deleted connections like we do for deleted nodes, to prevent resurrection from sync
+  if (!d.conngone) d.conngone = {};
+  d.conngone[id] = Date.now();
+
   save(); render(); toast('Connection removed');
 }
 function selectConn(id) {
@@ -5253,6 +5310,11 @@ window.MNApp = {
     const docs = {};
     for (const [id, d] of Object.entries(state.docs)) {
       if (cams[id]) d.cam = cams[id];
+      // Ensure connection tracking is initialized and clean
+      d.connections = d.connections || [];
+      d.conngone = d.conngone || {};
+      // Filter out any connections that have been marked as deleted
+      d.connections = d.connections.filter(c => !d.conngone[c.id]);
       docs[id] = d;
     }
     S.docs = docs;
