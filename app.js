@@ -1684,18 +1684,41 @@ function drawEdges(visible) {
   const d = doc();
   const dashOf = s => (s === 'dashed' ? '9 7' : s === 'dotted' ? '1 6' : '');
 
+  const tapered = !!d.taper;
+  const depthMemo = {};
+  const depthOf = id => {
+    if (depthMemo[id] != null) return depthMemo[id];
+    const n = d.nodes[id];
+    return (depthMemo[id] = (!n || !n.parent || !d.nodes[n.parent]) ? 0 : depthOf(n.parent) + 1);
+  };
+
   visible.forEach(id => {
     const n = N(id);
     if (!n.parent || !P[n.parent]) return;
     const a = box(n.parent), b = box(id);
-    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    path.setAttribute('d', curve(a, b));
-    path.setAttribute('class', 'edge');
-    path.setAttribute('stroke', colorOf(id));
-    path.setAttribute('stroke-width', n.parent === d.root ? 3.6 : 2.6);
     const dash = dashOf(n.lineStyle);
-    if (dash) path.setAttribute('stroke-dasharray', dash);
-    if (isDimmed(id) || isDimmed(n.parent)) path.setAttribute('class', 'edge dim');
+    const dim = isDimmed(id) || isDimmed(n.parent);
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+
+    /* A tapered branch is a filled shape rather than a stroked line, so it
+       can be thick where it leaves the parent and thin where it arrives.
+       A dashed or dotted line has no taper to give it, and an elbow has
+       corners that a taper only makes untidy, so both keep their stroke. */
+    const shape = tapered && !dash ? branchGeom(a, b) : null;
+    if (shape) {
+      path.setAttribute('d', taperPath(shape, branchWidth(depthOf(n.parent)), branchWidth(depthOf(id))));
+      path.setAttribute('class', 'edge taper' + (dim ? ' dim' : ''));
+      /* set as a style, not an attribute: the stylesheet's fill:none for
+         ordinary branches would otherwise win and the shape would be
+         drawn in nothing at all */
+      path.style.fill = colorOf(id);
+    } else {
+      path.setAttribute('d', curve(a, b));
+      path.setAttribute('class', 'edge' + (dim ? ' dim' : ''));
+      path.setAttribute('stroke', colorOf(id));
+      path.setAttribute('stroke-width', n.parent === d.root ? 3.6 : 2.6);
+      if (dash) path.setAttribute('stroke-dasharray', dash);
+    }
     eL.appendChild(path);
   });
 
@@ -1800,6 +1823,82 @@ function setConnWaypoint(c, world) {
   c.slide = (vx * g.ux + vy * g.uy) / g.len;
 }
 function straightenConn(c) { c.bow = 0; c.slide = 0; }
+
+/* ===================== tapered branches ============================
+   A branch that thins as it goes, the way a twig does. The line is drawn
+   as a filled shape instead of a stroke: the curve is walked from the
+   parent to the child, and at each step a point is placed either side of
+   it, further out at the start than at the end.
+   =================================================================== */
+const BRANCH_W0 = 7.4;        // the trunk, leaving the central idea
+const BRANCH_W_MIN = 1.7;     // the thinnest a twig gets
+function branchWidth(depth) {
+  return Math.max(BRANCH_W_MIN, BRANCH_W0 * Math.pow(0.62, Math.max(0, depth)));
+}
+
+/* The same line curve() draws, as four points. Elbows have corners that
+   this cannot follow, so they are left alone. */
+function branchGeom(a, b) {
+  const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 }, bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  const dx = bc.x - ac.x, dy = bc.y - ac.y;
+  const kind = doc().branch || 'curved';
+  if (kind === 'elbow') return null;
+  let p0, p1, p2, p3;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    const x1 = dx > 0 ? a.x + a.w : a.x, x2 = dx > 0 ? b.x : b.x + b.w;
+    const m = (x1 + x2) / 2;
+    p0 = { x: x1, y: ac.y }; p3 = { x: x2, y: bc.y };
+    if (kind === 'straight') {
+      p1 = { x: p0.x + (p3.x - p0.x) / 3, y: p0.y + (p3.y - p0.y) / 3 };
+      p2 = { x: p0.x + (p3.x - p0.x) * 2 / 3, y: p0.y + (p3.y - p0.y) * 2 / 3 };
+    } else {
+      p1 = { x: m, y: ac.y }; p2 = { x: m, y: bc.y };
+    }
+  } else {
+    const y1 = dy > 0 ? a.y + a.h : a.y, y2 = dy > 0 ? b.y : b.y + b.h;
+    const m = (y1 + y2) / 2;
+    p0 = { x: ac.x, y: y1 }; p3 = { x: bc.x, y: y2 };
+    if (kind === 'straight') {
+      p1 = { x: p0.x + (p3.x - p0.x) / 3, y: p0.y + (p3.y - p0.y) / 3 };
+      p2 = { x: p0.x + (p3.x - p0.x) * 2 / 3, y: p0.y + (p3.y - p0.y) * 2 / 3 };
+    } else {
+      p1 = { x: ac.x, y: m }; p2 = { x: bc.x, y: m };
+    }
+  }
+  return { p0, p1, p2, p3 };
+}
+
+const TAPER_STEPS = 16;
+function taperPath(g, w0, w1) {
+  const { p0, p1, p2, p3 } = g;
+  const at = t => {
+    const u = 1 - t;
+    return {
+      x: u * u * u * p0.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * p3.x,
+      y: u * u * u * p0.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * p3.y
+    };
+  };
+  const slope = t => {
+    const u = 1 - t;
+    return {
+      x: 3 * u * u * (p1.x - p0.x) + 6 * u * t * (p2.x - p1.x) + 3 * t * t * (p3.x - p2.x),
+      y: 3 * u * u * (p1.y - p0.y) + 6 * u * t * (p2.y - p1.y) + 3 * t * t * (p3.y - p2.y)
+    };
+  };
+  const near = [], far = [];
+  for (let i = 0; i <= TAPER_STEPS; i++) {
+    const t = i / TAPER_STEPS;
+    const p = at(t), s = slope(t);
+    const len = Math.hypot(s.x, s.y) || 1;
+    /* across the line, half the width it should have at this point */
+    const nx = -s.y / len, ny = s.x / len;
+    const h = (w0 + (w1 - w0) * t) / 2;
+    near.push((p.x + nx * h).toFixed(2) + ' ' + (p.y + ny * h).toFixed(2));
+    far.push((p.x - nx * h).toFixed(2) + ' ' + (p.y - ny * h).toFixed(2));
+  }
+  far.reverse();
+  return 'M' + near[0] + 'L' + near.slice(1).join('L') + 'L' + far.join('L') + 'Z';
+}
 
 function curve(a, b, arc) {
   const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 }, bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
@@ -3836,6 +3935,16 @@ function panelDoc() {
   w.appendChild(group('Branch shape', selectRow(
     [['curved', 'Curved'], ['straight', 'Straight'], ['elbow', 'Elbow']],
     d.branch || 'curved', v => { pushUndo(); d.branch = v; save(); render(); })));
+  const taperRow = rowOf([chipBtn('Tapered branches', () => {
+    pushUndo(); d.taper = !d.taper; save(); render();
+  }, !!d.taper)]);
+  const taperWhy = document.createElement('div');
+  taperWhy.className = 'help';
+  taperWhy.textContent = d.branch === 'elbow'
+    ? 'Elbows keep their even line — a taper only blurs the corners.'
+    : 'Branches leave the centre thick and thin out towards the edges.';
+  taperRow.appendChild(taperWhy);
+  w.appendChild(group('Branch width', taperRow));
   w.appendChild(group('Tags', tagManager()));
   w.appendChild(group('Connections', connectionList()));
   const stats = document.createElement('div');
@@ -3843,10 +3952,19 @@ function panelDoc() {
   stats.textContent = `${Object.keys(d.nodes).length} nodes · ${d.connections.length} connections · ` +
     `${Object.values(d.nodes).filter(n => n.note.trim()).length} notes`;
   w.appendChild(group('This document', stats));
-  w.appendChild(group(' ', rowOf([
-    chipBtn('Duplicate document', () => duplicateDoc(d.id)),
-    chipBtn('Export this document', () => exportDoc(d))
-  ])));
+  w.appendChild(group(' ', rowOf([chipBtn('Duplicate document', () => duplicateDoc(d.id))])));
+
+  /* saving it out, in whichever shape it needs to leave in */
+  const saveRow = rowOf(EXPORT_KINDS.map(([kind, label, why]) => {
+    const b = chipBtn(label, () => exportDocAs(d, kind));
+    b.title = why;
+    return b;
+  }).concat([(() => {
+    const b = chipBtn('Print or PDF', () => printDoc());
+    b.title = 'Your browser can save the printed page as a PDF';
+    return b;
+  })()]));
+  w.appendChild(group('Save a copy as', saveRow));
   return w;
 }
 
@@ -4134,8 +4252,13 @@ function centerOn(id) {
 /* =====================================================================
    IMPORT / EXPORT
    ===================================================================== */
+const MIME_FOR = {
+  json: 'application/json', md: 'text/markdown', txt: 'text/plain',
+  opml: 'text/x-opml', svg: 'image/svg+xml'
+};
 function download(name, text) {
-  const blob = new Blob([text], { type: 'application/json' });
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  const blob = new Blob([text], { type: (MIME_FOR[ext] || 'text/plain') + ';charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name;
@@ -4161,6 +4284,549 @@ function exportDoc(d) {
   download(d.name.replace(/[^\w\- ]/g, '') + '-' + stamp() + '.json', envelope(embedImagesForExport({ [d.id]: d }), [d.id]));
   toast('Exported this document');
 }
+
+/* =====================================================================
+   Writing a document out in somebody else's format.
+
+   Each walks the map in reading order, so the result is the outline you
+   would get by reading the branches top to bottom.
+   ===================================================================== */
+function walkDoc(d, fn) {
+  const kids = n => (n.children || []).filter(c => d.nodes[c]);
+  const go = (id, depth) => {
+    const n = d.nodes[id];
+    if (!n) return;
+    fn(n, depth);
+    kids(n).forEach(c => go(c, depth + 1));
+  };
+  go(d.root, 0);
+  /* free-standing nodes come after the tree, each as its own top line */
+  Object.values(d.nodes).forEach(n => {
+    if (!n.parent && n.id !== d.root) go(n.id, 0);
+  });
+}
+const safeName = s => (s || 'map').replace(/[^\w\- ]+/g, '').trim().slice(0, 60) || 'map';
+
+function docToMarkdown(d) {
+  const out = ['# ' + (d.name || 'Map'), ''];
+  const tagName = id => (d.tags.find(t => t.id === id) || {}).name;
+  walkDoc(d, (n, depth) => {
+    if (depth === 0 && n.id === d.root) return;        // already the heading
+    const text = (n.text || 'Untitled').replace(/\n+/g, ' ');
+    const box = typeof n.done === 'boolean' && hasTaskLook(d, n) ? (n.done ? '[x] ' : '[ ] ') : '';
+    const tags = (n.tags || []).map(tagName).filter(Boolean).map(t => ` #${t.replace(/\s+/g, '-')}`).join('');
+    const marks = markersOf(n).join(' ');
+    out.push('  '.repeat(Math.max(0, depth - 1)) + '- ' + box + text + (marks ? ' ' + marks : '') + tags);
+    if (n.note && n.note.trim()) {
+      n.note.trim().split('\n').forEach(line =>
+        out.push('  '.repeat(Math.max(0, depth - 1)) + '  > ' + line));
+    }
+  });
+  return out.join('\n') + '\n';
+}
+/* a node only gets a checkbox if it is being used as one */
+function hasTaskLook(d, n) {
+  if (n.done) return true;
+  const sibs = n.parent && d.nodes[n.parent] ? d.nodes[n.parent].children : [];
+  return sibs.some(id => d.nodes[id] && d.nodes[id].done);
+}
+
+function docToText(d) {
+  const out = [];
+  walkDoc(d, (n, depth) => {
+    out.push('    '.repeat(depth) + (n.text || 'Untitled').replace(/\n+/g, ' '));
+    if (n.note && n.note.trim()) {
+      n.note.trim().split('\n').forEach(line => out.push('    '.repeat(depth + 1) + line));
+    }
+  });
+  return out.join('\n') + '\n';
+}
+
+function docToOPML(d) {
+  const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const lines = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<opml version="2.0">',
+    '  <head>',
+    '    <title>' + esc(d.name) + '</title>',
+    '    <dateModified>' + new Date(d.updated || Date.now()).toUTCString() + '</dateModified>',
+    '  </head>',
+    '  <body>'
+  ];
+  const open = [];
+  const kids = n => (n.children || []).filter(c => d.nodes[c]);
+  const emit = (id, depth) => {
+    const n = d.nodes[id];
+    if (!n) return;
+    const pad = '    '.repeat(depth + 1);
+    const text = esc((n.text || 'Untitled').replace(/\n+/g, ' '));
+    const note = n.note && n.note.trim() ? ' _note="' + esc(n.note.trim()) + '"' : '';
+    const list = kids(n);
+    if (!list.length) { lines.push(pad + '<outline text="' + text + '"' + note + '/>'); return; }
+    lines.push(pad + '<outline text="' + text + '"' + note + '>');
+    list.forEach(c => emit(c, depth + 1));
+    lines.push(pad + '</outline>');
+  };
+  emit(d.root, 0);
+  Object.values(d.nodes).forEach(n => { if (!n.parent && n.id !== d.root) emit(n.id, 0); });
+  lines.push('  </body>', '</opml>', '');
+  void open;
+  return lines.join('\n');
+}
+
+/* PDF is the browser's own job: its print dialogue can save one, and it
+   lays the map out at the right size without this app carrying a PDF
+   writer around. */
+function printDoc() {
+  if (UI.view !== 'map' && UI.view !== 'outline') return;
+  toast('Choose "Save as PDF" as the destination');
+  setTimeout(() => window.print(), 350);
+}
+
+const EXPORT_KINDS = [
+  ['json', 'MindNote file', 'Everything, to open here again', d => ({ ext: 'json', body: envelope(embedImagesForExport({ [d.id]: d }), [d.id]) })],
+  ['md', 'Markdown', 'An outline, with notes and tick boxes', d => ({ ext: 'md', body: docToMarkdown(d) })],
+  ['opml', 'OPML', 'For other outliners and mind mappers', d => ({ ext: 'opml', body: docToOPML(d) })],
+  ['txt', 'Plain text', 'Indented lines, nothing else', d => ({ ext: 'txt', body: docToText(d) })]
+];
+
+function exportDocAs(d, kind) {
+  const found = EXPORT_KINDS.find(k => k[0] === kind);
+  if (!found) return;
+  const { ext, body } = found[3](d);
+  download(safeName(d.name) + '-' + stamp() + '.' + ext, body);
+  toast('Exported as ' + found[1]);
+}
+/* =====================================================================
+   Bringing documents in from elsewhere.
+
+   A MindNode document is a folder in a zip: the map itself is a binary
+   property list, Apple's own format. Both are read here rather than with
+   a library, because the whole point of this app is that it has no
+   dependencies to rot. The browser supplies the hard part — inflating
+   the compressed entries — through DecompressionStream.
+   ===================================================================== */
+
+function zipEntries(buf) {
+  const u = new Uint8Array(buf), dv = new DataView(buf);
+  let eocd = -1;
+  /* the directory is at the end, after any trailing comment */
+  for (let i = u.length - 22; i >= 0 && i > u.length - 22 - 65536; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a zip');
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const dec = new TextDecoder();
+  const out = {};
+  for (let i = 0; i < count; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) break;
+    const nameLen = dv.getUint16(p + 28, true);
+    out[dec.decode(u.subarray(p + 46, p + 46 + nameLen))] = {
+      method: dv.getUint16(p + 10, true),
+      csize: dv.getUint32(p + 20, true),
+      local: dv.getUint32(p + 42, true)
+    };
+    p += 46 + nameLen + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+  }
+  return { u, dv, out };
+}
+async function zipRead(buf, match) {
+  const { u, dv, out } = zipEntries(buf);
+  const pick = Object.keys(out).find(match);
+  if (!pick) return null;
+  const e = out[pick];
+  /* the local header repeats the name and extra lengths, and they can
+     differ from the ones in the directory */
+  const start = e.local + 30 + dv.getUint16(e.local + 26, true) + dv.getUint16(e.local + 28, true);
+  const raw = u.subarray(start, start + e.csize);
+  if (e.method === 0) return raw.slice();
+  if (e.method !== 8) throw new Error('unsupported compression');
+  if (typeof DecompressionStream !== 'function') throw new Error('no-inflate');
+  /* fed straight into the stream rather than through a Blob or a Response,
+     so this needs nothing of the browser beyond the decompressor itself */
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(raw);
+  writer.close();
+  const reader = ds.readable.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value); total += value.length;
+  }
+  const joined = new Uint8Array(total);
+  let at = 0;
+  for (const c of chunks) { joined.set(c, at); at += c.length; }
+  return joined;
+}
+
+/* A binary property list: a table of objects addressed by offset, with
+   containers holding indexes into that table. */
+function bplist(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]) !== 'bplist')
+    throw new Error('not a property list');
+  const n = bytes.length;
+  const offSize = bytes[n - 26], refSize = bytes[n - 25];
+  const num = Number(dv.getBigUint64(n - 24));
+  const top = Number(dv.getBigUint64(n - 16));
+  const tableAt = Number(dv.getBigUint64(n - 8));
+  const readBE = (at, size) => { let v = 0; for (let i = 0; i < size; i++) v = v * 256 + bytes[at + i]; return v; };
+  const offsets = [];
+  for (let i = 0; i < num; i++) offsets.push(readBE(tableAt + i * offSize, offSize));
+
+  const seen = new Map();
+  function obj(index) {
+    if (seen.has(index)) return seen.get(index);
+    let at = offsets[index];
+    const marker = bytes[at];
+    const kind = marker >> 4;
+    let len = marker & 0x0f;
+    at += 1;
+    /* a nibble of 15 means the real count is the next object, an integer */
+    const bigCount = () => {
+      if (len !== 0x0f) return;
+      const size = 1 << (bytes[at] & 0x0f);
+      at += 1;
+      len = readBE(at, size);
+      at += size;
+    };
+    let value = null;
+    switch (kind) {
+      case 0x0: value = len === 8 ? false : len === 9 ? true : null; break;
+      case 0x1: {
+        const size = 1 << len;
+        value = size === 8 ? Number(dv.getBigInt64(at)) : readBE(at, size);
+        break;
+      }
+      case 0x2: value = (1 << len) === 4 ? dv.getFloat32(at) : dv.getFloat64(at); break;
+      case 0x3: value = new Date((dv.getFloat64(at) + 978307200) * 1000); break;
+      case 0x4: bigCount(); value = bytes.subarray(at, at + len); break;
+      case 0x5: {
+        bigCount();
+        let s = ''; for (let i = 0; i < len; i++) s += String.fromCharCode(bytes[at + i]);
+        value = s; break;
+      }
+      case 0x6: {
+        bigCount();
+        let s = ''; for (let i = 0; i < len; i++) s += String.fromCharCode(dv.getUint16(at + i * 2));
+        value = s; break;
+      }
+      case 0x8: value = { uid: readBE(at, len + 1) }; break;
+      case 0xa: case 0xc: {
+        bigCount();
+        const arr = []; seen.set(index, arr);
+        for (let i = 0; i < len; i++) arr.push(obj(readBE(at + i * refSize, refSize)));
+        return arr;
+      }
+      case 0xd: {
+        bigCount();
+        const d = {}; seen.set(index, d);
+        for (let i = 0; i < len; i++) {
+          const k = obj(readBE(at + i * refSize, refSize));
+          d[k] = obj(readBE(at + len * refSize + i * refSize, refSize));
+        }
+        return d;
+      }
+    }
+    seen.set(index, value);
+    return value;
+  }
+  return obj(top);
+}
+
+/* ---- turning one into a MindNote document ---- */
+
+/* MindNode keeps a node's words as a scrap of HTML. */
+function htmlToText(html) {
+  if (!html) return '';
+  const el = document.createElement('div');
+  el.innerHTML = String(html).replace(/<\/p>\s*<p[^>]*>/gi, '\n').replace(/<br\s*\/?>/gi, '\n');
+  return (el.textContent || '')
+    .replace(/[\u2028\u2029]/g, '\n')      // the separators Apple uses inside a line
+    .replace(/ /g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+}
+/* "{0.92, 0.58, 0.18, 1.0}" is how a colour is written down */
+function appleColour(str) {
+  if (typeof str !== 'string') return null;
+  const m = str.match(/-?\d*\.?\d+/g);
+  if (!m || m.length < 3) return null;
+  const hex = m.slice(0, 3).map(v => {
+    const n = Math.round(Math.min(1, Math.max(0, parseFloat(v))) * 255);
+    return n.toString(16).padStart(2, '0');
+  }).join('');
+  return '#' + hex;
+}
+const MN_SHAPES = { 0: 'line', 1: 'rect', 2: 'rounded', 3: 'pill', 4: 'circle', 5: 'rounded', 6: 'hexagon' };
+
+function mindNodeToDocs(plist, fallbackName) {
+  const maps = (plist && plist.canvas && plist.canvas.mindMaps) || [];
+  if (!maps.length) throw new Error('no map in that file');
+
+  /* the tags belong to the whole canvas, and nodes point at them by id */
+  const canvasTags = (plist.canvas.tags || []).map(t => ({
+    id: uid(), name: t.name || 'Tag',
+    color: appleColour(t.color) || TAG_COLORS[0],
+    mnId: t.tagID
+  }));
+  const tagBy = {};
+  canvasTags.forEach(t => { tagBy[t.mnId] = t.id; });
+
+  const docs = [];
+  maps.forEach((map, mapIndex) => {
+    const nodes = {};
+    let rootId = null;
+    let tasksSeen = 0;
+
+    const take = (mn, parentId, inheritedColour) => {
+      const n = mkNode(parentId, htmlToText((mn.title || {}).text));
+      const stroke = ((mn.pathStyle || {}).strokeStyle || {}).color;
+      const mine = appleColour(stroke);
+      /* Only record a colour where it changes, so it cascades down the
+         branch the way it does in a map built here. The central idea is
+         left alone: the colour on it describes the line arriving at it,
+         which does not exist, and is usually white. */
+      if (mine && parentId && mine !== inheritedColour) n.color = mine;
+      const shapeType = (mn.shapeStyle || {}).shapeType;
+      if (MN_SHAPES[shapeType]) n.shape = MN_SHAPES[shapeType];
+      if (mn.hasFoldedSubnodes) n.collapsed = true;
+      if (mn.task) { n.done = mn.task.state === 2; tasksSeen++; }
+      if (mn.note) n.note = htmlToText(typeof mn.note === 'string' ? mn.note : mn.note.text);
+      const tagIds = (mn.tags || []).map(t => tagBy[t]).filter(Boolean);
+      if (tagIds.length) n.tags = tagIds;
+      nodes[n.id] = n;
+      if (!parentId) rootId = n.id;
+      (mn.subnodes || []).forEach(sub => {
+        const kid = take(sub, n.id, mine || inheritedColour);
+        n.children.push(kid.id);
+      });
+      return n;
+    };
+    take(map.mainNode || {}, null, null);
+
+    const name = nodes[rootId].text || fallbackName || 'Imported map';
+    const doc = {
+      id: uid(), name, root: rootId, nodes,
+      connections: [], tags: canvasTags.map(t => ({ id: t.id, name: t.name, color: t.color })),
+      layout: map.layoutStyle === 2 ? 'vertical' : 'horizontal',
+      cam: null, updated: Date.now()
+    };
+    /* a map whose children are ticked off is a checklist */
+    if (tasksSeen) Object.values(nodes).forEach(n => {
+      if (n.children.length && n.children.every(c => nodes[c].children.length === 0)) {
+        if (n.children.some(c => typeof nodes[c].done === 'boolean')) n.checklist = false;
+      }
+    });
+    doc.name = maps.length > 1 ? `${name} (${mapIndex + 1})` : name;
+    docs.push(doc);
+  });
+  return docs;
+}
+
+async function importMindNode(buf, fileName) {
+  let bytes;
+  try {
+    bytes = await zipRead(buf, n => /(^|\/)contents\.xml$/i.test(n) && !/mindnodestyle/i.test(n));
+  } catch (e) {
+    if (e.message === 'no-inflate') { toast('This browser cannot open zipped files — try Chrome or Safari'); return; }
+    throw e;
+  }
+  if (!bytes) {
+    /* the newer "MindNode Next" documents keep their map in Contents.data,
+       an undocumented binary that this cannot read */
+    const next = await zipRead(buf, n => /(^|\/)Contents\.data$/i.test(n)).catch(() => null);
+    toast(next
+      ? 'That is a MindNode Next document, which cannot be read yet — export it as MindNode Classic'
+      : 'No map found inside that file');
+    return;
+  }
+  const docs = mindNodeToDocs(bplist(bytes), fileName.replace(/\.(mindnode|zip)$/i, ''));
+  docs.forEach(d => { S.docs[d.id] = d; S.order.push(d.id); });
+  S.active = docs[0].id;
+  UI.selected = null;
+  primeSigs(); save(); render();
+  const n = docs.reduce((a, d) => a + Object.keys(d.nodes).length, 0);
+  toast(`Imported ${n} nodes from MindNode`);
+}
+
+/* ---- outlines: OPML, Markdown, and plain indented text ----
+   All three are the same idea — a list of lines, each with a depth — so
+   they are turned into that shape and then into a document by one piece
+   of code. */
+function docFromOutline(rows, name) {
+  if (!rows.length) throw new Error('nothing in that file');
+  const nodes = {};
+  let root;
+  /* a single top-level row becomes the central idea; several get one made
+     for them, so nothing is lost by promotion */
+  const tops = rows.filter(r => r.depth === 0);
+  let start = 0;
+  if (tops.length === 1 && rows[0].depth === 0) {
+    root = mkNode(null, rows[0].text);
+    if (rows[0].note) root.note = rows[0].note;
+    start = 1;
+  } else {
+    root = mkNode(null, name || 'Imported outline');
+  }
+  nodes[root.id] = root;
+  /* any tags mentioned are made real, once each */
+  const tags = [];
+  const tagId = label => {
+    const key = label.trim().toLowerCase();
+    let found = tags.find(t => t.name.toLowerCase() === key);
+    if (!found) {
+      found = { id: uid(), name: label.trim(), color: TAG_COLORS[tags.length % TAG_COLORS.length] };
+      tags.push(found);
+    }
+    return found.id;
+  };
+  /* the deepest node seen at each level, so a row can find its parent */
+  const atDepth = { [start ? 0 : -1]: root };
+  for (let i = start; i < rows.length; i++) {
+    const r = rows[i];
+    let d = r.depth + (start ? 0 : 1);
+    /* a jump of more than one level is pulled back to the next one down */
+    while (d > 0 && !atDepth[d - 1]) d--;
+    const parent = atDepth[d - 1] || root;
+    const n = mkNode(parent.id, r.text);
+    if (r.note) n.note = r.note;
+    if (typeof r.done === 'boolean') n.done = r.done;
+    if (r.tags && r.tags.length) n.tags = r.tags.map(tagId);
+    if (r.markers && r.markers.length) setMarkers(n, r.markers);
+    nodes[n.id] = n;
+    parent.children.push(n.id);
+    atDepth[d] = n;
+    for (const k of Object.keys(atDepth)) if (+k > d) delete atDepth[k];
+  }
+  return {
+    id: uid(), name: root.text || name || 'Imported outline', root: root.id, nodes,
+    connections: [], tags, layout: 'horizontal', cam: null, updated: Date.now()
+  };
+}
+
+function rowsFromOPML(text) {
+  const xml = new DOMParser().parseFromString(text, 'application/xml');
+  if (xml.querySelector('parsererror')) throw new Error('that OPML could not be read');
+  const body = xml.querySelector('body') || xml.documentElement;
+  const rows = [];
+  const walk = (el, depth) => {
+    [...el.children].filter(c => c.tagName.toLowerCase() === 'outline').forEach(c => {
+      rows.push({
+        depth,
+        text: c.getAttribute('text') || c.getAttribute('title') || '',
+        note: c.getAttribute('_note') || c.getAttribute('note') || ''
+      });
+      walk(c, depth + 1);
+    });
+  };
+  walk(body, 0);
+  const title = (xml.querySelector('head > title') || {}).textContent || '';
+  return { rows, name: title.trim() };
+}
+
+/* Markdown headings and bullets, or just indented lines. Both end up as
+   a depth per line. */
+function rowsFromText(text) {
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+  const rows = [];
+  let lastHeading = -1;
+  /* The widths of the indents seen so far, one per level. Comparing a line
+     against these rather than dividing by a guessed step is what makes
+     tabs, two spaces and four spaces all work, and keeps two lines at the
+     same indent as each other's siblings. */
+  let indents = [];
+  for (const raw of lines) {
+    if (!raw.trim()) continue;
+    const head = raw.match(/^(#{1,6})\s+(.*)$/);
+    if (head) {
+      lastHeading = head[1].length - 1;
+      indents = [];
+      rows.push({ depth: lastHeading, text: head[2].trim() });
+      continue;
+    }
+    const width = (raw.match(/^[ \t]*/) || [''])[0].replace(/\t/g, '    ').length;
+    let body = raw.trim();
+
+    /* a quoted line is a note on the line above, which is how notes are
+       written out by this app */
+    const quote = body.match(/^>\s?(.*)$/);
+    if (quote && rows.length) {
+      const owner = rows[rows.length - 1];
+      owner.note = owner.note ? owner.note + '\n' + quote[1] : quote[1];
+      continue;
+    }
+
+    const bullet = body.match(/^([-*+]|\d+[.)])\s+(.*)$/);
+    if (bullet) body = bullet[2];
+    let done;
+    const box = body.match(/^\[([ xX])\]\s*(.*)$/);
+    if (box) { done = box[1].toLowerCase() === 'x'; body = box[2]; }
+    if (!body) continue;
+
+    /* trailing hashtags are tags, the way every outliner writes them */
+    const tags = [];
+    body = body.replace(/(?:\s+#([A-Za-z][\w-]*))+\s*$/, m => {
+      (m.match(/#[A-Za-z][\w-]*/g) || []).forEach(t => tags.push(t.slice(1).replace(/-/g, ' ')));
+      return '';
+    }).trim();
+    /* and trailing symbols are markers, which is where they are put */
+    const marks = [];
+    try {
+      body = body.replace(/(\s*(?:\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic}|\p{Emoji_Modifier})*)+)+$/u,
+        m => {
+          (m.match(/\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic}|\p{Emoji_Modifier})*/gu) || [])
+            .forEach(e => marks.push(e));
+          return '';
+        }).trim();
+    } catch (e) { /* an older engine without these classes keeps the symbols in the text */ }
+    if (!body && !marks.length) continue;
+
+    while (indents.length && width < indents[indents.length - 1]) indents.pop();
+    if (!indents.length || width > indents[indents.length - 1]) indents.push(width);
+    const depth = (lastHeading + 1) + indents.length - 1;
+    rows.push({ depth, text: body || marks.join(''), done, tags, markers: marks });
+  }
+  return rows;
+}
+
+function addImportedDocs(docs, what) {
+  docs.forEach(d => { S.docs[d.id] = d; S.order.push(d.id); });
+  if (docs.length) { S.active = docs[0].id; UI.selected = null; }
+  primeSigs(); save(); render();
+  const n = docs.reduce((a, d) => a + Object.keys(d.nodes).length, 0);
+  toast(`Imported ${n} node${n === 1 ? '' : 's'}${what ? ' from ' + what : ''}`);
+}
+
+/* What kind of file is this? The name is a hint; the contents decide. */
+async function importAnyFile(file) {
+  const name = file.name || 'file';
+  try {
+    const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+    if (head[0] === 0x50 && head[1] === 0x4b) {          // "PK": a zip
+      await importMindNode(await file.arrayBuffer(), name);
+      return;
+    }
+    const text = await file.text();
+    const trimmed = text.replace(/^﻿/, '').trimStart();
+    if (trimmed.startsWith('{')) { importJSON(text); return; }
+    if (/^<(\?xml|opml)/i.test(trimmed) || /<outline\b/i.test(trimmed.slice(0, 2000))) {
+      const { rows, name: title } = rowsFromOPML(text);
+      addImportedDocs([docFromOutline(rows, title || name.replace(/\.[^.]+$/, ''))], 'OPML');
+      return;
+    }
+    addImportedDocs([docFromOutline(rowsFromText(text), name.replace(/\.[^.]+$/, ''))],
+      /^#|\n#|^\s*[-*+]\s/m.test(text) ? 'Markdown' : 'text');
+  } catch (e) {
+    toast(e && e.message ? e.message : 'That file could not be read');
+  }
+}
+
 function importJSON(text) {
   try {
     const data = JSON.parse(text);
@@ -4447,9 +5113,7 @@ function wire() {
   $('#dataBtn').addEventListener('click', openDataPanel);
   $('#importFile').addEventListener('change', e => {
     const f = e.target.files[0]; if (!f) return;
-    const r = new FileReader();
-    r.onload = () => importJSON(r.result);
-    r.readAsText(f);
+    importAnyFile(f);
     e.target.value = '';
   });
 

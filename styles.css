@@ -346,6 +346,8 @@ button{cursor:pointer;background:none;border:0}
 #nodes{position:absolute;left:0;top:0;width:0;height:0}
 
 .edge{fill:none;stroke-linecap:round}
+/* a tapered branch is a filled shape, not a stroked line */
+.edge.taper{stroke:none}
 .xlink{fill:none;stroke:var(--link);stroke-width:2;stroke-dasharray:6 5;marker-end:url(#arrow);pointer-events:none}
 /* An invisible, generously wide copy of the line underneath, so it can be
    hit with a fingertip rather than only with a mouse. */

@@ -10,13 +10,13 @@
      never be served stale.
    ===================================================================== */
 
-const CACHE = 'mindnote-v21';
+const CACHE = 'mindnote-v22';
 const SHELL = [
   './',
   './index.html',
-  './styles.css?v=21',
-  './app.js?v=21',
-  './sync.js?v=21',
+  './styles.css?v=22',
+  './app.js?v=22',
+  './sync.js?v=22',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
