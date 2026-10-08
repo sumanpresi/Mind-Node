@@ -451,6 +451,66 @@ button{cursor:pointer;background:none;border:0}
 #notePop .np-link:hover{border-color:var(--accent)}
 #notePop .np-link.has-url{color:var(--accent)}
 
+/* footer: attach button and the small picture control never wrap */
+#notePop .np-attach{flex:0 0 auto}
+#notePop .np-attach-btn{white-space:nowrap}
+#notePop .np-add-file{color:var(--text);font-weight:600}
+#notePop .np-add-file .clip-svg{width:17px;height:17px;flex:0 0 auto}
+#notePop .np-add-file.is-ready{background:var(--accent-soft);color:var(--accent)}
+#notePop .np-pic{padding:3px}
+#notePop .np-pic .pic-ic{width:20px;height:20px;fill:none;stroke:var(--muted);stroke-width:1.4;stroke-linejoin:round}
+#notePop .np-pic .pic-ic circle{fill:var(--muted);stroke:none}
+
+/* the list of files on a node */
+#notePop.has-files{width:min(calc(100vw - 16px),400px)}
+#notePop .np-files{border-top:1px solid var(--line);padding:8px 10px 6px;display:flex;flex-direction:column;gap:6px;
+  max-height:38vh;overflow:auto}
+#notePop .np-files-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);
+  padding:0 2px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#notePop .np-file{display:flex;align-items:center;gap:8px;padding:6px 6px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+#notePop .np-file.is-missing{opacity:.7;border-style:dashed}
+#notePop .np-file.is-error{border-color:var(--danger)}
+#notePop .np-ftype{
+  flex:0 0 auto;width:34px;height:34px;border-radius:7px;display:grid;place-items:center;
+  font-size:9.5px;font-weight:800;letter-spacing:.02em;color:#fff;background:#7a7f9a;
+}
+#notePop .np-ftype[data-kind="pdf"]{background:#e2483d}
+#notePop .np-ftype[data-kind="doc"]{background:#2f6fde}
+#notePop .np-ftype[data-kind="xls"]{background:#1e8e4e}
+#notePop .np-ftype[data-kind="ppt"]{background:#e46a2b}
+#notePop .np-ftype[data-kind="img"]{background:#8b5cf6}
+#notePop .np-ftype[data-kind="zip"]{background:#9a7b2f}
+#notePop .np-ftype[data-kind="vid"],#notePop .np-ftype[data-kind="aud"]{background:#d13f8e}
+#notePop .np-ftype[data-kind="txt"]{background:#5b6475}
+#notePop .np-fmain{flex:1;min-width:0}
+#notePop .np-fname{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#notePop .np-fmeta{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#notePop .np-ferr{color:var(--danger);white-space:normal}
+#notePop .np-fbtn{flex:0 0 auto;font-size:12px;font-weight:600;padding:5px 9px;border-radius:6px;border:1px solid var(--line);
+  background:var(--surface);color:var(--text);white-space:nowrap}
+#notePop .np-fbtn:hover{border-color:var(--accent)}
+#notePop .np-fbtn.is-main{background:var(--accent);border-color:var(--accent);color:#fff}
+#notePop .np-fbtn.danger{color:var(--danger)}
+#notePop .np-fmore{padding:5px 7px;font-size:14px;line-height:1}
+#notePop .np-bar{height:5px;border-radius:3px;background:var(--line);overflow:hidden;margin:4px 0 3px}
+#notePop .np-bar i{display:block;height:100%;background:var(--accent);transition:width .2s ease}
+#notePop .np-menu{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:8px;background:var(--surface);
+  box-shadow:0 8px 20px rgba(20,20,43,.14);padding:4px;margin:-2px 0 2px auto;min-width:180px}
+#notePop .np-menu-item{text-align:left;font-size:13px;padding:7px 10px;border-radius:6px;color:var(--text)}
+#notePop .np-menu-item:hover{background:var(--paper)}
+#notePop .np-menu-item.danger{color:var(--danger)}
+#notePop .np-ask{border:1px solid var(--danger);border-radius:8px;padding:8px 10px;background:var(--surface)}
+#notePop .np-ask-q{font-size:12.5px;font-weight:600;margin-bottom:6px;color:var(--text)}
+#notePop .np-ask-row{display:flex;flex-wrap:wrap;gap:6px}
+@media (pointer:coarse){ #notePop .np-fbtn{padding:8px 11px;font-size:13px} }
+
+/* the paperclip on a node that has files */
+.n-file-ic{display:inline-flex;align-items:center;gap:1px;flex:0 0 auto;height:24px;padding:0 3px;border-radius:6px;
+  cursor:pointer;color:var(--nc)}
+.n-file-ic .clip-svg{width:18px;height:18px;display:block}
+.n-file-ic b{font-size:11px;font-weight:800;color:var(--text)}
+.n-file-ic:hover{background:var(--paper)}
+
 /* the preview under a node's note icon */
 #noteTip{
   position:fixed;z-index:75;max-width:260px;padding:4px 8px;border-radius:5px;

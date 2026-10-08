@@ -1,4 +1,28 @@
-# Changes — v26 (8 October 2026)
+# Changes — v27 (8 October 2026)
+
+## Attachments in Google Drive
+
+- **Attach file** in the note box uploads any file, any size, straight from the browser to
+  the user's Google Drive (resumable, with progress, Cancel, and Retry; a dropped connection
+  carries on from where it stopped). Nothing goes through the sync server.
+- Files land in `MindNote Attachments/<map name>/`, found again by a tag rather than by name,
+  so every device uses the same folders.
+- The node keeps only `{ id, driveId, name, mime, size, modified }` per file and shows a 📎
+  (with a count). Hovering lists the files; clicking opens the note box.
+- **Open**: Word/Excel/PowerPoint in Google's editors in their own format (`rtpof=true`, no
+  conversion); Google Docs/Sheets/Slides in their editors; PDF, images and everything else in
+  Drive's viewer. The account is named in the link, for browsers signed in to several.
+- Name, size and date refresh whenever the note opens (when already signed in), which is how
+  edits made in Google's editor appear. A file deleted or binned in Drive shows as missing.
+- ⋮ menu: Open, Open in Google Drive, Copy link, Download, Rename, Remove. Remove asks:
+  *MindNote only* (file stays in Drive) or *also move it to the Drive bin* (recoverable for
+  30 days). Nothing is ever erased outright, and undo restores a removed attachment record.
+- Sign-in: Google's browser token flow, scope `drive.file`; no client secret, token kept in
+  memory only. Data & backup shows the Drive status, with Connect / Disconnect.
+- The node picture (shown on the map, kept on the device) is unchanged and sits next to
+  Attach file. The footer no longer wraps when a long link is shown.
+
+# v26 (8 October 2026)
 
 - **Notes are always marked.** A node with a note now always shows a small notepad-and-
   pencil icon. Before, the marker was hidden whenever the toolbar's Notes toggle was off,

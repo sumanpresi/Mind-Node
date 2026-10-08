@@ -1524,6 +1524,11 @@ function buildNodeEl(id) {
        Hovering shows the note; a click opens it beside the node. */
     meta.push(`<span class="n-note-ic" data-note="${id}" role="button" aria-label="Open note">${NOTE_ICON}</span>`);
   }
+  if (Array.isArray(n.files) && n.files.length) {
+    /* a paperclip, with a count when there is more than one file */
+    meta.push(`<span class="n-file-ic" data-files="${id}" role="button" aria-label="${n.files.length} attachment${n.files.length === 1 ? '' : 's'}">` +
+      CLIP_ICON + (n.files.length > 1 ? `<b>${n.files.length}</b>` : '') + '</span>');
+  }
   if (n.link && S.docs[n.link]) meta.push(`<span class="n-link-ic" data-link="${id}" title="Open linked document">🔗</span>`);
   meta.push(`<span class="n-url-ic link-manage${headerLinked ? ' has-url' : ''}" data-linkbtn="${id}" title="${headerLinked ? 'Edit link' : 'Add link'}">${headerLinked ? '↗' : '🔗'}</span>`);
   if (meta.length) {
@@ -2388,7 +2393,7 @@ function canvasSetup() {
     }
     const foldBtn = e.target.closest('[data-fold]');
     const taskBtn = e.target.closest('[data-task]');
-    const noteIc = e.target.closest('[data-note]');
+    const noteIc = e.target.closest('[data-note], [data-files]');
     const linkIc = e.target.closest('[data-link]');
     const urlIc = e.target.closest('[data-url]');
     const addBtn = e.target.closest('[data-add]');
@@ -2765,7 +2770,7 @@ function canvasSetup() {
      keeps them up, and arriving on a handle keeps them up for good. */
   let hoverOff = null;
   canvas.addEventListener('pointerover', e => {
-    const ic = e.target.closest('[data-note]');
+    const ic = e.target.closest('[data-note], [data-files]');
     if (ic && e.pointerType === 'mouse') showNoteTip(ic); else hideNoteTip();
     if (e.target.closest('[data-add], [data-linkfrom]')) { clearTimeout(hoverOff); return; }
     const el = e.target.closest('.node');
@@ -2809,6 +2814,8 @@ function canvasSetup() {
     }
     const note = e.target.closest('[data-note]');
     if (note) { hideNoteTip(); openNotePopover(note.dataset.note); return; }
+    const filesIc = e.target.closest('[data-files]');
+    if (filesIc) { hideNoteTip(); openNotePopover(filesIc.dataset.files); return; }
     const link = e.target.closest('[data-link]');
     if (link) { const t = N(link.dataset.link).link; if (S.docs[t]) openDoc(t); return; }
     const urlIc = e.target.closest('[data-url]');
@@ -3183,6 +3190,7 @@ let notePopEl = null;
 let notePopClose = null;
 let notePopPlace = null;     // keeps the open note against its node while the map moves
 let notePopRefresh = null;   // repaints its footer after anything redraws the map
+let notePopFiles = null;     // { docId, id, paint } of the open box, for upload progress
 function closeNotePopover() {
   if (notePopClose) { const f = notePopClose; notePopClose = null; f(); }
 }
@@ -3211,6 +3219,7 @@ function openNotePopover(id) {
     <span class="np-caret" aria-hidden="true"></span>
     <div class="np-head"><span class="np-title"></span></div>
     <textarea class="np-text" placeholder="Write a note…" aria-label="Note"></textarea>
+    <div class="np-files" hidden></div>
     <div class="np-foot">
       <span class="np-attach"></span>
       <button type="button" class="np-link"></button>
@@ -3222,24 +3231,45 @@ function openNotePopover(id) {
   document.body.appendChild(box);
   notePopEl = box;
 
-  /* ---- footer: attachment (the node's picture) ---- */
+  /* ---- footer: "Attach file" (to Google Drive) and the node's picture ---- */
+  if (window.MNDrive) MNDrive.preload();
   const attach = box.querySelector('.np-attach');
-  const fileIn = document.createElement('input');
-  fileIn.type = 'file'; fileIn.accept = 'image/*'; fileIn.hidden = true;
-  box.appendChild(fileIn);
+  const picIn = document.createElement('input');
+  picIn.type = 'file'; picIn.accept = 'image/*'; picIn.hidden = true;
+  const docIn = document.createElement('input');
+  docIn.type = 'file'; docIn.multiple = true; docIn.hidden = true;
+  box.appendChild(picIn); box.appendChild(docIn);
+  const docId = S.active;
   const paintAttach = () => {
     const live = N(id);
     attach.innerHTML = '';
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'np-attach-btn np-add-file';
+    add.innerHTML = CLIP_ICON;
+    add.appendChild(document.createTextNode('Attach file'));
+    add.title = 'Attach any file — it is stored in your Google Drive';
+    add.addEventListener('click', () => {
+      if (!window.MNDrive) { toast('Attachments are not available here'); return; }
+      if (!navigator.onLine) { toast('Google Drive is unavailable offline — your notes are safe'); return; }
+      if (MNDrive.hasToken()) { docIn.click(); return; }
+      MNDrive.signIn().then(() => {
+        toast('Google Drive connected — now choose the file');
+        add.classList.add('is-ready');
+      }).catch(e => { if (e.message !== 'superseded') toast(e.message); });
+    });
+    attach.appendChild(add);
+
     const src = live ? imageSrcFor(live) : '';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'np-attach-btn';
+    const pic = document.createElement('button');
+    pic.type = 'button';
+    pic.className = 'np-attach-btn np-pic';
     if (src) {
       const img = document.createElement('img');
       img.src = src; img.alt = '';
-      btn.appendChild(img);
-      btn.appendChild(document.createTextNode('Image attached'));
-      btn.title = 'Replace the picture on this node';
+      pic.appendChild(img);
+      pic.title = 'Replace the picture shown on this node';
+      attach.appendChild(pic);
       const rm = document.createElement('button');
       rm.type = 'button'; rm.className = 'np-attach-rm';
       rm.textContent = '✕'; rm.title = 'Remove the picture';
@@ -3248,26 +3278,38 @@ function openNotePopover(id) {
         const l = N(id); if (!l) return;
         pushUndo(); clearNodeImage(l); save(); render(); paintAttach();
       });
-      attach.appendChild(btn);
       attach.appendChild(rm);
     } else {
-      btn.innerHTML = '<svg viewBox="0 0 16 20" aria-hidden="true"><path d="M2.5 1.5h7l4 4v13h-11z"/><path d="M9.5 1.5v4h4"/></svg>';
-      btn.appendChild(document.createTextNode('No Attachment'));
-      btn.title = 'Attach a picture to this node';
-      attach.appendChild(btn);
+      pic.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true" class="pic-ic"><rect x="2.5" y="4" width="15" height="12" rx="2"/><circle cx="7.5" cy="8.5" r="1.5"/><path d="M3 14.5l4.5-4 3 2.5 3-3 3.5 3.5"/></svg>';
+      pic.title = 'Show a picture on this node (kept on this device)';
+      pic.setAttribute('aria-label', 'Add a picture to the node');
+      attach.appendChild(pic);
     }
-    btn.addEventListener('click', () => fileIn.click());
+    pic.addEventListener('click', () => picIn.click());
   };
-  fileIn.addEventListener('change', () => {
-    const f = fileIn.files[0]; if (!f) return;
+  picIn.addEventListener('change', () => {
+    const f = picIn.files[0]; if (!f) return;
     shrinkImage(f, dataUrl => {
       const l = N(id); if (!l) return;
       pushUndo(); setNodeImage(l, dataUrl); save(); render(); paintAttach();
       placeNotePop();
     });
-    fileIn.value = '';
+    picIn.value = '';
+  });
+  docIn.addEventListener('change', () => {
+    const list = Array.from(docIn.files || []);
+    docIn.value = '';
+    list.forEach(f => startUpload(docId, id, f));
   });
   paintAttach();
+
+  /* ---- the attachments themselves ---- */
+  const filesEl = box.querySelector('.np-files');
+  /* placed through notePopPlace, which exists once the box has been
+     positioned below; the first paint happens before that */
+  const paintFiles = () => paintFileList(filesEl, docId, id, () => { if (notePopPlace) notePopPlace(); });
+  paintFiles();
+  refreshFileInfo(docId, id);
 
   /* ---- footer: link ---- */
   const linkBtn = box.querySelector('.np-link');
@@ -3332,10 +3374,11 @@ function openNotePopover(id) {
     closeNotePopover();
   };
   document.addEventListener('pointerdown', outside, true);
-  notePopRefresh = () => { paintLink(); placeNotePop(); };
+  notePopRefresh = () => { paintLink(); paintFiles(); placeNotePop(); };
+  notePopFiles = { docId, id, paint: paintFiles };
   notePopClose = () => {
     document.removeEventListener('pointerdown', outside, true);
-    notePopPlace = null; notePopRefresh = null;
+    notePopPlace = null; notePopRefresh = null; notePopFiles = null;
     box.remove();
     if (notePopEl === box) notePopEl = null;
     render();                            // the note marker appears or goes
@@ -3346,8 +3389,10 @@ function openNotePopover(id) {
 /* The preview that appears under a node's note icon on hover. */
 let noteTipEl = null, noteTipTimer = null;
 function showNoteTip(icon) {
-  const n = N(icon.dataset.note);
-  if (!n || !n.note.trim() || notePopEl) { hideNoteTip(); return; }
+  const forFiles = !!icon.dataset.files;
+  const n = N(forFiles ? icon.dataset.files : icon.dataset.note);
+  const text = !n ? '' : forFiles ? filesOf(n).map(f => '📎 ' + f.name).join('\n') : n.note.trim();
+  if (!text || notePopEl) { hideNoteTip(); return; }
   clearTimeout(noteTipTimer);
   noteTipTimer = setTimeout(() => {
     if (!icon.isConnected) return;
@@ -3357,8 +3402,7 @@ function showNoteTip(icon) {
       noteTipEl.setAttribute('role', 'tooltip');
       document.body.appendChild(noteTipEl);
     }
-    const t = n.note.trim();
-    noteTipEl.textContent = t.length > 240 ? t.slice(0, 240) + '…' : t;
+    noteTipEl.textContent = text.length > 240 ? text.slice(0, 240) + '…' : text;
     noteTipEl.hidden = false;
     const r = icon.getBoundingClientRect();
     positionFloating(noteTipEl, r.left - 4, r.bottom + 6);
@@ -3367,6 +3411,310 @@ function showNoteTip(icon) {
 function hideNoteTip() {
   clearTimeout(noteTipTimer);
   if (noteTipEl) noteTipEl.hidden = true;
+}
+
+/* =====================================================================
+   Attachments — files kept in the user's Google Drive (see drive.js).
+   A node holds only a small record per file:
+     { id, driveId, name, mime, size, modified }
+   so the map stays tiny however large the files are. Editing a file in
+   Google's editor keeps the same Drive file, so the record never goes
+   stale; its name, size and date are refreshed whenever the note opens.
+   ===================================================================== */
+const CLIP_ICON = '<svg viewBox="0 0 20 20" aria-hidden="true" class="clip-svg"><path d="M13.5 6.5l-5.8 5.8a1.6 1.6 0 0 0 2.3 2.3l6-6a3.2 3.2 0 0 0-4.5-4.5l-6.2 6.2a4.8 4.8 0 0 0 6.8 6.8l5.4-5.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+const uploads = {};          // "docId:nodeId" -> uploads in flight or failed
+const missingFiles = new Set();   // Drive ids found to be gone or in the bin
+
+const filesOf = n => (n && Array.isArray(n.files)) ? n.files : [];
+function fileKind(f) {
+  const m = (f.mime || '').toLowerCase(), ext = ((f.name || '').split('.').pop() || '').toLowerCase();
+  if (m === 'application/pdf' || ext === 'pdf') return ['pdf', 'PDF'];
+  if (m.startsWith('image/')) return ['img', ext && ext.length <= 4 ? ext.toUpperCase() : 'IMG'];
+  if (/wordprocessing|msword|google-apps.document|opendocument.text|rtf/.test(m) || /^(docx?|odt|rtf)$/.test(ext)) return ['doc', ext && ext.length <= 4 ? ext.toUpperCase() : 'DOC'];
+  if (/spreadsheet|ms-excel|google-apps.spreadsheet|csv/.test(m) || /^(xlsx?|ods|csv)$/.test(ext)) return ['xls', ext && ext.length <= 4 ? ext.toUpperCase() : 'XLS'];
+  if (/presentation|powerpoint|google-apps.presentation/.test(m) || /^(pptx?|odp)$/.test(ext)) return ['ppt', ext && ext.length <= 4 ? ext.toUpperCase() : 'PPT'];
+  if (/zip|compressed|x-7z|x-rar|tar|gzip/.test(m) || /^(zip|rar|7z|gz|tar)$/.test(ext)) return ['zip', ext.toUpperCase() || 'ZIP'];
+  if (m.startsWith('video/')) return ['vid', ext.toUpperCase() || 'VID'];
+  if (m.startsWith('audio/')) return ['aud', ext.toUpperCase() || 'AUD'];
+  if (m.startsWith('text/') || ext === 'txt') return ['txt', ext.toUpperCase() || 'TXT'];
+  return ['file', ext && ext.length <= 4 ? ext.toUpperCase() : 'FILE'];
+}
+function fileSizeText(b) {
+  b = Number(b) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(b < 10240 ? 1 : 0) + ' KB';
+  if (b < 1024 * 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + ' MB';
+  return (b / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+function fileDateText(iso) {
+  const t = iso ? new Date(iso) : null;
+  if (!t || isNaN(t)) return '';
+  return t.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+/* The node a file belongs to, wherever it is — the user may have moved
+   to another map while an upload was running. */
+const nodeIn = (docId, nodeId) => (S.docs[docId] && S.docs[docId].nodes[nodeId]) || null;
+
+/* Change a node's file list: one undo step when it is on the open map. */
+function changeFiles(docId, nodeId, fn) {
+  const n = nodeIn(docId, nodeId);
+  if (!n) return false;
+  if (docId === S.active) pushUndo();
+  n.files = fn(filesOf(n).slice());
+  if (!n.files.length) delete n.files;
+  save(); render();
+  return true;
+}
+
+function startUpload(docId, nodeId, file) {
+  const k = docId + ':' + nodeId;
+  const list = uploads[k] || (uploads[k] = []);
+  const u = { key: uid(), name: file.name, size: file.size, frac: 0, error: null, handle: null };
+  list.push(u);
+  const dropRow = () => {
+    const l = uploads[k]; if (!l) return;
+    const i = l.indexOf(u); if (i >= 0) l.splice(i, 1);
+    if (!l.length) delete uploads[k];
+  };
+  u.run = () => {
+    u.error = null; u.frac = 0;
+    const d = S.docs[docId];
+    u.handle = MNDrive.upload(file, docId, d ? d.name : 'Untitled map', nodeId, f => {
+      u.frac = f;
+      const bar = document.querySelector(`#notePop [data-up="${u.key}"] .np-bar i`);
+      if (bar) bar.style.width = Math.round(f * 100) + '%';
+    });
+    u.handle.done.then(f => {
+      dropRow();
+      const ok = changeFiles(docId, nodeId, files => files.concat([{
+        id: uid(), driveId: f.id, name: f.name, mime: f.mimeType,
+        size: Number(f.size) || file.size || 0, modified: f.modifiedTime || ''
+      }]));
+      if (!ok) toast(`"${f.name}" is in your Google Drive, but its node no longer exists`);
+      else toast(`"${f.name}" attached`);
+      repaintFilesFor(docId, nodeId);
+    }).catch(e => {
+      if (e.code === 'cancel') dropRow();
+      else u.error = e.message || 'Upload failed';
+      repaintFilesFor(docId, nodeId);
+    });
+    repaintFilesFor(docId, nodeId);
+  };
+  u.run();
+}
+function repaintFilesFor(docId, nodeId) {
+  if (notePopFiles && notePopFiles.docId === docId && notePopFiles.id === nodeId) notePopFiles.paint();
+}
+/* Run something that needs Google Drive: straight away if connected,
+   otherwise after signing in (which has to start inside the click). */
+function withDrive(fn) {
+  if (!window.MNDrive) { toast('Attachments are not available here'); return; }
+  if (MNDrive.hasToken()) { fn(); return; }
+  MNDrive.signIn().then(fn).catch(e => { if (e.message !== 'superseded') toast(e.message); });
+}
+function driveError(e, docId, nodeId, f) {
+  if (e && e.code === 'missing' && f) { missingFiles.add(f.driveId); repaintFilesFor(docId, nodeId); }
+  toast((e && e.message) || 'Google Drive did not respond');
+}
+
+/* Bring each file's name, size and date up to date — this is how an edit
+   made in Google's editor shows up here. Only when already signed in:
+   opening a note never pops up a sign-in window by itself. */
+function refreshFileInfo(docId, nodeId) {
+  const n = nodeIn(docId, nodeId);
+  if (!n || !filesOf(n).length || !window.MNDrive || !MNDrive.hasToken()) return;
+  filesOf(n).forEach(f => {
+    MNDrive.info(f.driveId).then(info => {
+      if (info.trashed) { missingFiles.add(f.driveId); repaintFilesFor(docId, nodeId); return; }
+      missingFiles.delete(f.driveId);
+      const size = Number(info.size) || f.size || 0;
+      if (info.name === f.name && size === f.size && info.modifiedTime === f.modified && info.mimeType === f.mime) {
+        repaintFilesFor(docId, nodeId); return;
+      }
+      const live = nodeIn(docId, nodeId);
+      const rec = live && filesOf(live).find(x => x.driveId === f.driveId);
+      if (!rec) return;
+      rec.name = info.name; rec.size = size; rec.modified = info.modifiedTime; rec.mime = info.mimeType;
+      save(); render();
+    }).catch(e => {
+      if (e.code === 'missing') { missingFiles.add(f.driveId); repaintFilesFor(docId, nodeId); }
+    });
+  });
+}
+
+function paintFileList(host, docId, nodeId, relayout) {
+  const n = nodeIn(docId, nodeId);
+  const files = filesOf(n);
+  const ups = uploads[docId + ':' + nodeId] || [];
+  host.innerHTML = '';
+  host.hidden = !files.length && !ups.length;
+  const pop = host.closest('#notePop');
+  if (pop) pop.classList.toggle('has-files', !host.hidden);
+  if (host.hidden) { if (relayout) relayout(); return; }
+
+  const head = document.createElement('div');
+  head.className = 'np-files-head';
+  const who = window.MNDrive && MNDrive.account();
+  head.textContent = 'Attachments' + (files.length ? ` · ${files.length}` : '') + ' · Google Drive';
+  head.title = who ? `Kept in ${who}'s Google Drive, folder MindNote Attachments` : 'Kept in your Google Drive, folder MindNote Attachments';
+  host.appendChild(head);
+
+  const badge = f => {
+    const [kind, label] = fileKind(f);
+    const b = document.createElement('span');
+    b.className = 'np-ftype';
+    b.dataset.kind = kind;
+    b.textContent = label;
+    return b;
+  };
+  const btn = (label, title, fn, cls) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'np-fbtn' + (cls ? ' ' + cls : '');
+    b.textContent = label;
+    b.title = title;
+    b.setAttribute('aria-label', title);
+    b.addEventListener('click', e => { e.stopPropagation(); fn(b); });
+    return b;
+  };
+
+  files.forEach(f => {
+    const row = document.createElement('div');
+    row.className = 'np-file';
+    const gone = missingFiles.has(f.driveId);
+    if (gone) row.classList.add('is-missing');
+    row.appendChild(badge(f));
+    const main = document.createElement('div');
+    main.className = 'np-fmain';
+    const nm = document.createElement('div');
+    nm.className = 'np-fname';
+    nm.textContent = f.name;
+    nm.title = f.name;
+    const meta = document.createElement('div');
+    meta.className = 'np-fmeta';
+    meta.textContent = gone ? 'Not found in Google Drive — moved to the bin or deleted'
+      : [fileSizeText(f.size), fileDateText(f.modified)].filter(Boolean).join(' · ');
+    main.appendChild(nm); main.appendChild(meta);
+    row.appendChild(main);
+
+    if (!gone) {
+      row.appendChild(btn('Open', 'Open ' + f.name + ' in a new tab', () => {
+        window.open(MNDrive.openUrl(f), '_blank', 'noopener');
+      }, 'is-main'));
+      row.appendChild(btn('Drive', 'Show it in Google Drive', () => {
+        window.open(MNDrive.driveUrl(f), '_blank', 'noopener');
+      }));
+    }
+    row.appendChild(btn('⋮', 'More', b => openFileMenu(b, row, docId, nodeId, f, gone), 'np-fmore'));
+    host.appendChild(row);
+  });
+
+  ups.forEach(u => {
+    const row = document.createElement('div');
+    row.className = 'np-file is-uploading' + (u.error ? ' is-error' : '');
+    row.dataset.up = u.key;
+    row.appendChild(badge({ name: u.name, mime: '' }));
+    const main = document.createElement('div');
+    main.className = 'np-fmain';
+    const nm = document.createElement('div');
+    nm.className = 'np-fname'; nm.textContent = u.name;
+    main.appendChild(nm);
+    if (u.error) {
+      const er = document.createElement('div');
+      er.className = 'np-fmeta np-ferr'; er.textContent = u.error;
+      main.appendChild(er);
+    } else {
+      const bar = document.createElement('div');
+      bar.className = 'np-bar';
+      bar.innerHTML = `<i style="width:${Math.round(u.frac * 100)}%"></i>`;
+      main.appendChild(bar);
+      const meta = document.createElement('div');
+      meta.className = 'np-fmeta'; meta.textContent = 'Uploading ' + fileSizeText(u.size) + ' to Google Drive…';
+      main.appendChild(meta);
+    }
+    row.appendChild(main);
+    if (u.error) {
+      row.appendChild(btn('Retry', 'Try the upload again', () => withDrive(u.run), 'is-main'));
+      row.appendChild(btn('✕', 'Dismiss', () => {
+        const l = uploads[docId + ':' + nodeId]; if (!l) return;
+        l.splice(l.indexOf(u), 1); if (!l.length) delete uploads[docId + ':' + nodeId];
+        repaintFilesFor(docId, nodeId);
+      }));
+    } else {
+      row.appendChild(btn('Cancel', 'Stop this upload', () => { if (u.handle) u.handle.cancel(); }));
+    }
+    host.appendChild(row);
+  });
+  if (relayout) relayout();
+}
+
+/* The ⋮ menu of one attachment, and the remove question, both shown in
+   place inside the note box. */
+function openFileMenu(anchorBtn, row, docId, nodeId, f, gone) {
+  const box = document.getElementById('notePop');
+  const old = box && box.querySelector('.np-menu');
+  if (old) { const same = old.dataset.for === f.id; old.remove(); if (same) return; }
+  const menu = document.createElement('div');
+  menu.className = 'np-menu';
+  menu.dataset.for = f.id;
+  const item = (label, fn, danger) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'np-menu-item' + (danger ? ' danger' : '');
+    b.textContent = label;
+    b.addEventListener('click', e => { e.stopPropagation(); menu.remove(); fn(); });
+    menu.appendChild(b);
+  };
+  if (!gone) {
+    item('Open', () => window.open(MNDrive.openUrl(f), '_blank', 'noopener'));
+    item('Open in Google Drive', () => window.open(MNDrive.driveUrl(f), '_blank', 'noopener'));
+    item('Copy link', () => {
+      const url = `https://drive.google.com/file/d/${f.driveId}/view`;
+      const done = () => toast('Link copied — it opens only for people the file is shared with');
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, () => window.prompt('Copy this link', url));
+      else window.prompt('Copy this link', url);
+    });
+    item('Download', () => window.open(MNDrive.downloadUrl(f), '_blank', 'noopener'));
+    item('Rename…', () => withDrive(() => {
+      const name = window.prompt('New name for the file', f.name);
+      if (!name || !name.trim() || name.trim() === f.name) return;
+      MNDrive.rename(f.driveId, name.trim()).then(info => {
+        changeFiles(docId, nodeId, files => files.map(x => x.id === f.id
+          ? Object.assign({}, x, { name: info.name, modified: info.modifiedTime || x.modified }) : x));
+      }).catch(e => driveError(e, docId, nodeId, f));
+    }));
+  }
+  item('Remove…', () => askRemoveFile(row, docId, nodeId, f, gone), true);
+  row.after(menu);
+}
+function askRemoveFile(row, docId, nodeId, f, gone) {
+  const ask = document.createElement('div');
+  ask.className = 'np-ask';
+  ask.innerHTML = `<div class="np-ask-q"></div><div class="np-ask-row"></div>`;
+  ask.querySelector('.np-ask-q').textContent = `Remove "${f.name}" from this node?`;
+  const rowEl = ask.querySelector('.np-ask-row');
+  const b = (label, fn, cls) => {
+    const x = document.createElement('button');
+    x.type = 'button'; x.className = 'np-fbtn' + (cls ? ' ' + cls : ''); x.textContent = label;
+    x.addEventListener('click', e => { e.stopPropagation(); fn(); });
+    rowEl.appendChild(x);
+  };
+  const dropRecord = () => {
+    missingFiles.delete(f.driveId);
+    changeFiles(docId, nodeId, files => files.filter(x => x.id !== f.id));
+  };
+  b('Remove from MindNote only', () => { ask.remove(); dropRecord(); toast('Removed — the file is still in your Google Drive'); }, 'is-main');
+  if (!gone) b('Also move it to the Drive bin', () => withDrive(() => {
+    MNDrive.trash(f.driveId).then(() => {
+      ask.remove(); dropRecord(); toast('Removed, and moved to the Google Drive bin (recoverable for 30 days)');
+    }).catch(e => {
+      if (e.code === 'missing') { ask.remove(); dropRecord(); return; }
+      toast(e.message);
+    });
+  }), 'danger');
+  b('Cancel', () => ask.remove());
+  row.after(ask);
 }
 
 /* The notes panel: the side panel opened on its Note tab, which follows
@@ -4658,7 +5006,7 @@ let findAt = -1;
 function nodeMatches(n, q) {
   /* markers are part of the haystack, so pasting 🚩 into the search box
      lists every node flagged for action */
-  const hay = (n.text || '') + ' ' + (n.note || '') + ' ' + markersOf(n).join(' ');
+  const hay = (n.text || '') + ' ' + (n.note || '') + ' ' + markersOf(n).join(' ') + ' ' + filesOf(n).map(f => f.name).join(' ');
   return hay.toLowerCase().includes(q);
 }
 function refreshFindRing() {
@@ -4696,7 +5044,7 @@ function runSearch(q) {
   S.order.forEach(did => {
     const d = S.docs[did];
     Object.values(d.nodes).forEach(n => {
-      const hay = (n.text + ' ' + n.note + ' ' + markersOf(n).join(' ')).toLowerCase();
+      const hay = (n.text + ' ' + n.note + ' ' + markersOf(n).join(' ') + ' ' + filesOf(n).map(f => f.name).join(' ')).toLowerCase();
       if (hay.includes(q)) hits.push({ did, id: n.id, text: n.text, docName: d.name });
     });
   });
@@ -5415,6 +5763,13 @@ async function openDataPanel() {
         <button class="chip" data-import>Open a backup file</button>
       </div>
       <p class="modal-note" id="dataSize"></p>
+      <div class="modal-label" style="margin-top:18px">Attachments in Google Drive</div>
+      <p class="modal-note" style="margin-top:0">Files attached to nodes are kept in your own Google Drive,
+      in a folder called MindNote Attachments. MindNote can see only the files it put there.</p>
+      <div class="modal-actions" style="align-items:center">
+        <span class="modal-note" id="driveState" style="margin:0"></span>
+        <button class="chip" data-drive></button>
+      </div>
       <div class="modal-label" style="margin-top:18px">Automatic backups on this device</div>
       <p class="modal-note" style="margin-top:0">Taken about once a day, ten kept. They live in this
       browser, so they survive a mistake but not a lost phone — keep a file as well.</p>
@@ -5433,6 +5788,27 @@ async function openDataPanel() {
   card.querySelector('[data-close]').addEventListener('click', close);
   card.querySelector('[data-export]').addEventListener('click', exportAll);
   card.querySelector('[data-import]').addEventListener('click', () => $('#importFile').click());
+
+  /* Google Drive: who is connected on this device, and a way in or out */
+  const driveBtn = card.querySelector('[data-drive]');
+  const driveState = card.querySelector('#driveState');
+  const attachedCount = Object.values(S.docs).reduce((a, d) =>
+    a + Object.values(d.nodes).reduce((b, n) => b + filesOf(n).length, 0), 0);
+  const paintDrive = () => {
+    if (!window.MNDrive) { driveState.textContent = 'Not available'; driveBtn.hidden = true; return; }
+    const on = MNDrive.hasToken(), who = MNDrive.account();
+    driveState.textContent = (on ? '● Connected' + (who ? ' as ' + who : '') : who ? 'Google account ' + who + ' — sign-in is asked for when needed' : 'Not connected') +
+      ` · ${attachedCount} file${attachedCount === 1 ? '' : 's'} attached`;
+    driveBtn.textContent = on ? 'Disconnect' : 'Connect Google Drive';
+  };
+  if (window.MNDrive) MNDrive.preload();
+  paintDrive();
+  document.addEventListener('mindnote:drive', paintDrive);
+  driveBtn.addEventListener('click', () => {
+    if (!window.MNDrive) return;
+    if (MNDrive.hasToken()) { MNDrive.signOut(); paintDrive(); toast('Google Drive disconnected on this device'); return; }
+    MNDrive.signIn().then(paintDrive).catch(e => { if (e.message !== 'superseded') toast(e.message); });
+  });
 
   const list = card.querySelector('#backupList');
   const keys = await listBackups();

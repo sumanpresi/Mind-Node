@@ -160,6 +160,21 @@ opens the notes panel at the side, which follows your selection, so you can clic
 after node and keep writing. Some browsers keep `Ctrl` + `5` for switching tabs; the menu
 item always works, and so does the shortcut in the installed app.
 
+**Attachments** — attach any file to a node (PDF, Word, Excel, PowerPoint, images, ZIP, any
+size) with **Attach file** in the note box. Files go straight from the browser into your own
+Google Drive, in a folder called *MindNote Attachments* with one sub-folder per map; the map
+itself keeps only each file's name, size, date and Drive id, so it stays small. A node with
+files shows a 📎. **Open** takes Word, Excel and PowerPoint files to Google's editor in their
+own format (no conversion), and PDFs and images to Drive's viewer; edits save into the same
+Drive file, so the node always opens the latest version. The ⋮ menu has Open in Drive, Copy
+link, Download, Rename and Remove — and Remove asks whether to keep the file in Drive or move
+it to Drive's bin. MindNote asks for Google's narrowest permission: it can see only the files
+it put there. Sign-in happens in a small Google window the first time you attach a file on a
+device, and again after about an hour; the sign-in is never written to storage. Files stay
+private to your Google account — someone else on your sync code sees the names but can only
+open files you have shared with them in Drive. PDFs can be viewed and commented on in the
+browser but not edited there.
+
 **Visual tags** — create tags in the inspector, then use the sun icon beside a tag to
 spotlight everything carrying it and fade the rest.
 
