@@ -396,24 +396,68 @@ button{cursor:pointer;background:none;border:0}
 .conn-note:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .conn-note-tip{font-size:11px;color:var(--muted);padding:0 2px}
 
-/* the note on a node, opened beside it */
+/* the note on a node, opened beside it — modelled on MindNode's note
+   popover: a coloured top edge, the node's name small and centred, a large
+   writing area, and a grey footer with the attachment and the link */
 #notePop{
-  position:fixed;z-index:70;width:min(calc(100vw - 16px),320px);
-  background:var(--surface);border:1px solid var(--line);border-top:3px solid var(--accent);
-  border-radius:12px;box-shadow:0 14px 36px rgba(20,20,43,.22);
-  display:flex;flex-direction:column;overflow:hidden;
+  position:fixed;z-index:70;width:min(calc(100vw - 16px),340px);
+  --npc:var(--accent);
+  background:var(--surface);border:1px solid var(--line);border-top:4px solid var(--npc);
+  border-radius:10px;box-shadow:0 12px 34px rgba(20,20,43,.22), 0 1px 3px rgba(20,20,43,.08);
+  display:flex;flex-direction:column;
 }
-#notePop .np-head{display:flex;align-items:center;gap:8px;padding:8px 8px 6px 12px;border-bottom:1px solid var(--line)}
-#notePop .np-title{flex:1;min-width:0;font-size:12px;font-weight:700;color:var(--muted);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#notePop .np-close{width:26px;height:26px;border-radius:7px;color:var(--muted);font-size:13px}
-#notePop .np-close:hover{background:var(--paper);color:var(--text)}
+/* the pointer to the node: a square turned on its corner, half hidden */
+#notePop .np-caret{
+  position:absolute;width:14px;height:14px;background:var(--surface);
+  border:1px solid var(--line);transform:rotate(45deg);pointer-events:none;
+}
+#notePop.np-right .np-caret{left:-8px;top:calc(var(--caret,40px) - 7px);border-top:0;border-right:0}
+#notePop.np-left .np-caret{right:-8px;top:calc(var(--caret,40px) - 7px);border-bottom:0;border-left:0}
+#notePop.np-below .np-caret{top:-11px;left:calc(var(--caret,50%) - 7px);border-bottom:0;border-right:0;
+  background:var(--npc);border-color:var(--npc)}
+#notePop .np-head{
+  padding:9px 14px;text-align:center;border-bottom:1px solid var(--line);
+  border-radius:6px 6px 0 0;background:var(--surface);position:relative;
+}
+#notePop .np-title{
+  display:block;font-size:12px;font-weight:500;color:var(--muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
 #notePop .np-text{
-  border:0;resize:vertical;min-height:150px;max-height:50vh;padding:10px 12px;
-  font:inherit;font-size:14px;line-height:1.5;background:var(--surface);color:var(--text);
+  border:0;resize:vertical;min-height:210px;max-height:55vh;padding:12px 14px;
+  font:inherit;font-size:15px;line-height:1.5;background:var(--surface);color:var(--text);
 }
 #notePop .np-text:focus{outline:none}
-#notePop .np-foot{font-size:11px;color:var(--muted);padding:6px 12px 8px;border-top:1px solid var(--line);background:var(--paper)}
+#notePop .np-foot{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:9px 12px;border-top:1px solid var(--line);background:var(--paper);
+  border-radius:0 0 9px 9px;
+}
+#notePop .np-attach{display:flex;align-items:center;gap:4px;min-width:0}
+#notePop .np-attach-btn{
+  display:flex;align-items:center;gap:8px;min-width:0;font-size:12.5px;color:var(--muted);
+  padding:3px 4px;border-radius:6px;
+}
+#notePop .np-attach-btn:hover{background:var(--surface);color:var(--text)}
+#notePop .np-attach-btn svg{width:16px;height:20px;flex:0 0 auto;fill:var(--surface);stroke:var(--line);stroke-width:1.2;stroke-linejoin:round}
+#notePop .np-attach-btn img{width:24px;height:24px;object-fit:cover;border-radius:4px;flex:0 0 auto}
+#notePop .np-attach-rm{font-size:11px;color:var(--muted);padding:3px 6px;border-radius:6px}
+#notePop .np-attach-rm:hover{color:var(--danger);background:var(--surface)}
+#notePop .np-link{
+  flex:0 1 auto;min-width:0;max-width:60%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  font-size:12.5px;font-weight:500;color:var(--text);background:var(--surface);
+  border:1px solid var(--line);border-radius:6px;padding:4px 14px;box-shadow:0 1px 1px rgba(20,20,43,.06);
+}
+#notePop .np-link:hover{border-color:var(--accent)}
+#notePop .np-link.has-url{color:var(--accent)}
+
+/* the preview under a node's note icon */
+#noteTip{
+  position:fixed;z-index:75;max-width:260px;padding:4px 8px;border-radius:5px;
+  background:var(--surface);color:var(--text);border:1px solid var(--line);
+  box-shadow:0 3px 10px rgba(20,20,43,.14);font-size:11.5px;line-height:1.35;
+  white-space:pre-wrap;pointer-events:none;
+}
 @media (pointer:coarse){
   .conn-btn{padding:10px 13px;font-size:13.5px}
   .xlink-hit{stroke-width:30}
@@ -501,7 +545,14 @@ button{cursor:pointer;background:none;border:0}
     height:44px;
     font-size:22px;
   }
-}.n-note-ic{cursor:pointer}
+}.n-note-ic{
+  display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+  width:22px;height:22px;border-radius:6px;cursor:pointer;
+}
+.n-note-ic svg{width:18px;height:18px;display:block}
+.n-note-ic .pg{fill:var(--surface);stroke:var(--line);stroke-width:1.3}
+.n-note-ic .ln{fill:none;stroke:var(--nc);stroke-width:1.5;stroke-linecap:round}
+.n-note-ic:hover .pg{stroke:var(--nc);fill:var(--paper)}
 .n-tags{display:flex;gap:3px}
 .n-tag{height:5px;width:16px;border-radius:3px;flex:0 0 16px}
 .n-fold{
@@ -643,10 +694,27 @@ button{cursor:pointer;background:none;border:0}
 }
 .add-handle:hover::after{opacity:1}
 
+/* the child +, MindNode style: a white rounded square a little way off the
+   node, tied to it by a short stub in the branch colour */
+.add-handle:not(.sib){
+  --hc:var(--accent);
+  border-radius:6px;background:var(--surface);color:var(--hc);
+  border:1.5px solid var(--line);box-shadow:0 1px 4px rgba(20,20,43,.14);
+  font-size:17px;font-weight:500;
+}
+.add-handle:not(.sib):hover{border-color:var(--hc);filter:none}
+.add-handle:not(.sib)::before{
+  content:'';position:absolute;background:var(--hc);opacity:.35;border-radius:2px;pointer-events:none;
+}
+.add-handle[data-dir="r"]::before{right:calc(100% + 1.5px);top:50%;width:12px;height:4px;margin-top:-2px}
+.add-handle[data-dir="l"]::before{left:calc(100% + 1.5px);top:50%;width:12px;height:4px;margin-top:-2px}
+.add-handle[data-dir="d"]::before{bottom:calc(100% + 1.5px);left:50%;height:12px;width:4px;margin-left:-2px}
+
 /* the dot on a node's corner that draws a connection */
 .link-handle{
   position:absolute;width:14px;height:14px;padding:0;border-radius:50%;
-  background:var(--link);border:2px solid var(--surface);
+  --hc:var(--accent);
+  background:var(--hc);border:2px solid var(--surface);
   box-shadow:0 1px 5px rgba(20,20,43,.3);cursor:crosshair;
   opacity:0;transform:scale(.5);pointer-events:none;z-index:7;
   transition:opacity .12s ease, transform .12s ease;

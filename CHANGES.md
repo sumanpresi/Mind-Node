@@ -1,4 +1,22 @@
-# Changes — v24 (8 October 2026)
+# Changes — v25 (8 October 2026)
+
+## Notes, the MindNode way
+
+- **Note popover** — attached to the node with a pointer, its top edge in the node's
+  colour, the node's name small and centred, a large writing area, and a grey footer:
+  *No Attachment* on the left (click to attach a picture to the node; it then shows the
+  thumbnail and a ✕ to remove it) and *Link…* on the right (adds or edits the node's web
+  link and then shows it). The popover follows the node as you pan and zoom.
+- **Note icon** — the 📝 emoji is replaced by a small lined-page button in the node's
+  colour. Hovering it shows the note in a small tooltip underneath; clicking opens it.
+- **The + beside a node** is now a white rounded square set a little way off the node,
+  joined to it by a short stub in the branch colour. The handles no longer flicker away
+  while the pointer crosses the gap to reach them.
+- **The connection dot** on the node's corner takes the node's colour.
+
+Asset version bumped to v25.
+
+# v24 (8 October 2026)
 
 ## Fixed: a removed connection coming back
 

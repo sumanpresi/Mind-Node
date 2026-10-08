@@ -1153,6 +1153,7 @@ function render() {
   if (!document.querySelector('#connBar .conn-input, #connBar .conn-note')) renderConnBar();
   renderInspector();
   renderSheet();
+  if (notePopRefresh) notePopRefresh();
 }
 
 /* --------------------------- documents list ------------------------ */
@@ -1395,6 +1396,7 @@ function positionHandles() {
   if (dot) {
     const q = P[id];
     dot.dataset.for = id;
+    dot.style.setProperty('--hc', colorOf(id));
     dot.style.left = (q.x + q.w - 4) + 'px';
     dot.style.top = (q.y - 10) + 'px';
     dot.classList.add('show');
@@ -1404,13 +1406,18 @@ function positionHandles() {
 
   /* child continues the branch outwards; sibling sits underneath, so the
      two can never be mistaken for one another */
+  /* the child + stands a little way out from the node, tied to it by a
+     short stub of the branch colour, as in MindNode */
+  kid.style.setProperty('--hc', colorOf(id));
   if (vertical) {
+    kid.dataset.dir = 'd';
     kid.style.left = (p.x + p.w / 2 - 11) + 'px';
-    kid.style.top = (p.y + p.h - 8) + 'px';
+    kid.style.top = (p.y + p.h + 12) + 'px';
     sib.style.left = (p.x + p.w - 8) + 'px';
     sib.style.top = (p.y + p.h / 2 - 11) + 'px';
   } else {
-    kid.style.left = (side > 0 ? p.x + p.w - 8 : p.x - 14) + 'px';
+    kid.dataset.dir = side > 0 ? 'r' : 'l';
+    kid.style.left = (side > 0 ? p.x + p.w + 12 : p.x - 34) + 'px';
     kid.style.top = (p.y + p.h / 2 - 11) + 'px';
     sib.style.left = (p.x + p.w / 2 - 11) + 'px';
     sib.style.top = (p.y + p.h - 8) + 'px';
@@ -1498,9 +1505,11 @@ function buildNodeEl(id) {
 
   const meta = [];
   if (UI.showNotes && n.note.trim()) {
-    /* hovering shows the note; a click opens it beside the node */
-    const preview = n.note.trim().length > 280 ? n.note.trim().slice(0, 280) + '…' : n.note.trim();
-    meta.push(`<span class="n-note-ic" data-note="${id}" title="${escapeHtml(preview)}" aria-label="Open note">📝</span>`);
+    /* a small page with lines on it: hovering shows the note, a click
+       opens it beside the node */
+    meta.push(`<span class="n-note-ic" data-note="${id}" role="button" aria-label="Open note">` +
+      `<svg viewBox="0 0 18 18" aria-hidden="true"><rect class="pg" x="1.5" y="1.5" width="15" height="15" rx="3.5"/>` +
+      `<path class="ln" d="M5.5 6h7M5.5 9h7M5.5 12h4.5"/></svg></span>`);
   }
   if (n.link && S.docs[n.link]) meta.push(`<span class="n-link-ic" data-link="${id}" title="Open linked document">🔗</span>`);
   meta.push(`<span class="n-url-ic link-manage${headerLinked ? ' has-url' : ''}" data-linkbtn="${id}" title="${headerLinked ? 'Edit link' : 'Add link'}">${headerLinked ? '↗' : '🔗'}</span>`);
@@ -2287,6 +2296,7 @@ function applyCam() {
   camSettle = setTimeout(() => world.classList.remove('is-moving'), 180);
   const z = $('#zoomFit');
   if (z) z.textContent = Math.round(c.s * 100) + '%';
+  if (notePopPlace) notePopPlace();
   /* the connection bar is pinned to a point on the map, so it travels with it */
   if (selConn) {
     const bar = document.getElementById('connBar');
@@ -2737,14 +2747,24 @@ function canvasSetup() {
   }, true);
   window.addEventListener('blur', closeContextMenu);
 
+  /* The handles sit just outside the node, so crossing the small gap to
+     reach one must not count as leaving the node: a short grace period
+     keeps them up, and arriving on a handle keeps them up for good. */
+  let hoverOff = null;
   canvas.addEventListener('pointerover', e => {
-    /* moving from a node onto one of its own handles must not hide them */
-    if (e.target.closest('[data-add], [data-linkfrom]')) return;
+    const ic = e.target.closest('[data-note]');
+    if (ic && e.pointerType === 'mouse') showNoteTip(ic); else hideNoteTip();
+    if (e.target.closest('[data-add], [data-linkfrom]')) { clearTimeout(hoverOff); return; }
     const el = e.target.closest('.node');
     const id = el ? el.dataset.id : null;
-    if (id !== hoverId) { hoverId = id; positionHandles(); }
+    clearTimeout(hoverOff);
+    if (id) { if (id !== hoverId) { hoverId = id; positionHandles(); } return; }
+    if (hoverId) hoverOff = setTimeout(() => { hoverId = null; positionHandles(); }, 320);
   });
-  canvas.addEventListener('pointerleave', () => { hoverId = null; positionHandles(); });
+  canvas.addEventListener('pointerleave', () => {
+    clearTimeout(hoverOff); hideNoteTip();
+    hoverId = null; positionHandles();
+  });
 
   canvas.addEventListener('dblclick', e => {
     // setPointerCapture() on this canvas can retarget the derived dblclick
@@ -2775,7 +2795,7 @@ function canvasSetup() {
       save(); render(); return;
     }
     const note = e.target.closest('[data-note]');
-    if (note) { openNotePopover(note.dataset.note); return; }
+    if (note) { hideNoteTip(); openNotePopover(note.dataset.note); return; }
     const link = e.target.closest('[data-link]');
     if (link) { const t = N(link.dataset.link).link; if (S.docs[t]) openDoc(t); return; }
     const urlIc = e.target.closest('[data-url]');
@@ -3148,6 +3168,8 @@ function openLinkPopover(id, x, y, forceEdit) {
    ===================================================================== */
 let notePopEl = null;
 let notePopClose = null;
+let notePopPlace = null;     // keeps the open note against its node while the map moves
+let notePopRefresh = null;   // repaints its footer after anything redraws the map
 function closeNotePopover() {
   if (notePopClose) { const f = notePopClose; notePopClose = null; f(); }
 }
@@ -3164,34 +3186,117 @@ function openNotePopover(id) {
   UI.selected = id;
   render();
 
+  /* Laid out the way MindNode does it: the node's name small and centred
+     at the top, a roomy writing area, and a footer for what hangs off the
+     node — its picture on the left, its web link on the right. A pointer
+     on the edge ties the box to the node it belongs to. */
   const box = document.createElement('div');
   box.id = 'notePop';
   box.setAttribute('role', 'dialog');
   box.setAttribute('aria-label', 'Note');
   box.innerHTML = `
-    <div class="np-head">
-      <span class="np-title"></span>
-      <button type="button" class="np-close" aria-label="Close note">✕</button>
-    </div>
-    <textarea class="np-text" placeholder="Write a note… it stays tucked behind a small marker on the node"></textarea>
-    <div class="np-foot">Saved as you type · Esc to close · clear the text to remove</div>`;
+    <span class="np-caret" aria-hidden="true"></span>
+    <div class="np-head"><span class="np-title"></span></div>
+    <textarea class="np-text" placeholder="Write a note…" aria-label="Note"></textarea>
+    <div class="np-foot">
+      <span class="np-attach"></span>
+      <button type="button" class="np-link"></button>
+    </div>`;
   box.querySelector('.np-title').textContent = n.text || 'Untitled';
+  box.style.setProperty('--npc', colorOf(id));        // the top edge takes the node's colour
   const ta = box.querySelector('.np-text');
   ta.value = n.note || '';
   document.body.appendChild(box);
   notePopEl = box;
 
-  /* beside the node, on whichever side has room */
-  const anchor = noteAnchor(id);
-  const bw = box.offsetWidth, bh = box.offsetHeight, pad = 10;
-  let x = window.innerWidth / 2 - bw / 2, y = window.innerHeight / 2 - bh / 2;
-  if (anchor) {
+  /* ---- footer: attachment (the node's picture) ---- */
+  const attach = box.querySelector('.np-attach');
+  const fileIn = document.createElement('input');
+  fileIn.type = 'file'; fileIn.accept = 'image/*'; fileIn.hidden = true;
+  box.appendChild(fileIn);
+  const paintAttach = () => {
+    const live = N(id);
+    attach.innerHTML = '';
+    const src = live ? imageSrcFor(live) : '';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'np-attach-btn';
+    if (src) {
+      const img = document.createElement('img');
+      img.src = src; img.alt = '';
+      btn.appendChild(img);
+      btn.appendChild(document.createTextNode('Image attached'));
+      btn.title = 'Replace the picture on this node';
+      const rm = document.createElement('button');
+      rm.type = 'button'; rm.className = 'np-attach-rm';
+      rm.textContent = '✕'; rm.title = 'Remove the picture';
+      rm.setAttribute('aria-label', 'Remove the picture');
+      rm.addEventListener('click', () => {
+        const l = N(id); if (!l) return;
+        pushUndo(); clearNodeImage(l); save(); render(); paintAttach();
+      });
+      attach.appendChild(btn);
+      attach.appendChild(rm);
+    } else {
+      btn.innerHTML = '<svg viewBox="0 0 16 20" aria-hidden="true"><path d="M2.5 1.5h7l4 4v13h-11z"/><path d="M9.5 1.5v4h4"/></svg>';
+      btn.appendChild(document.createTextNode('No Attachment'));
+      btn.title = 'Attach a picture to this node';
+      attach.appendChild(btn);
+    }
+    btn.addEventListener('click', () => fileIn.click());
+  };
+  fileIn.addEventListener('change', () => {
+    const f = fileIn.files[0]; if (!f) return;
+    shrinkImage(f, dataUrl => {
+      const l = N(id); if (!l) return;
+      pushUndo(); setNodeImage(l, dataUrl); save(); render(); paintAttach();
+      placeNotePop();
+    });
+    fileIn.value = '';
+  });
+  paintAttach();
+
+  /* ---- footer: link ---- */
+  const linkBtn = box.querySelector('.np-link');
+  const paintLink = () => {
+    const live = N(id);
+    const u = live && live.url && live.url.trim();
+    linkBtn.textContent = u ? u.replace(/^https?:\/\//i, '').replace(/\/$/, '') : 'Link…';
+    linkBtn.title = u ? 'Edit this node’s link' : 'Add a web link to this node';
+    linkBtn.classList.toggle('has-url', !!u);
+  };
+  paintLink();
+  linkBtn.addEventListener('click', () => {
+    const r = linkBtn.getBoundingClientRect();
+    openLinkPopover(id, r.right - 240, r.bottom + 8);
+  });
+
+  /* ---- placement, kept against the node as the map moves ---- */
+  const placeNotePop = () => {
+    const anchor = noteAnchor(id);
+    const bw = box.offsetWidth, bh = box.offsetHeight, gap = 14, m = 8;
+    const W = window.innerWidth, H = window.innerHeight;
+    box.classList.remove('np-right', 'np-left', 'np-below');
+    if (!anchor) { positionFloating(box, W / 2 - bw / 2, H / 2 - bh / 2); return; }
     const r = anchor.getBoundingClientRect();
-    if (r.right + pad + bw <= window.innerWidth - 8) { x = r.right + pad; y = r.top - 8; }
-    else if (r.left - pad - bw >= 8) { x = r.left - pad - bw; y = r.top - 8; }
-    else { x = r.left; y = r.bottom + pad; }         // a narrow screen: underneath
-  }
-  positionFloating(box, x, y);                       // and kept on screen
+    const cy = r.top + r.height / 2, cx = r.left + r.width / 2;
+    let side;
+    if (r.right + gap + bw <= W - m) side = 'right';
+    else if (r.left - gap - bw >= m) side = 'left';
+    else side = 'below';
+    box.classList.add('np-' + side);
+    if (side === 'below') {
+      positionFloating(box, cx - bw / 2, r.bottom + gap);
+      const left = parseFloat(box.style.left);
+      box.style.setProperty('--caret', clamp(cx - left, 18, bw - 18) + 'px');
+    } else {
+      positionFloating(box, side === 'right' ? r.right + gap : r.left - gap - bw, cy - 46);
+      const top = parseFloat(box.style.top);
+      box.style.setProperty('--caret', clamp(cy - top, 18, bh - 18) + 'px');
+    }
+  };
+  placeNotePop();
+  notePopPlace = placeNotePop;
 
   let undoTaken = false;
   ta.addEventListener('input', () => {
@@ -3205,17 +3310,50 @@ function openNotePopover(id) {
     e.stopPropagation();
     if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); closeNotePopover(); }
   });
-  box.querySelector('.np-close').addEventListener('click', () => closeNotePopover());
 
-  const outside = e => { if (!box.contains(e.target)) closeNotePopover(); };
+  /* the link editor opens on top of this box, so a click in it is not
+     a click "elsewhere"; whatever it saves shows on the next redraw */
+  const outside = e => {
+    if (box.contains(e.target)) return;
+    if (e.target.closest && e.target.closest('#linkPop')) return;
+    closeNotePopover();
+  };
   document.addEventListener('pointerdown', outside, true);
+  notePopRefresh = () => { paintLink(); placeNotePop(); };
   notePopClose = () => {
     document.removeEventListener('pointerdown', outside, true);
+    notePopPlace = null; notePopRefresh = null;
     box.remove();
     if (notePopEl === box) notePopEl = null;
     render();                            // the note marker appears or goes
   };
   setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
+}
+
+/* The preview that appears under a node's note icon on hover. */
+let noteTipEl = null, noteTipTimer = null;
+function showNoteTip(icon) {
+  const n = N(icon.dataset.note);
+  if (!n || !n.note.trim() || notePopEl) { hideNoteTip(); return; }
+  clearTimeout(noteTipTimer);
+  noteTipTimer = setTimeout(() => {
+    if (!icon.isConnected) return;
+    if (!noteTipEl) {
+      noteTipEl = document.createElement('div');
+      noteTipEl.id = 'noteTip';
+      noteTipEl.setAttribute('role', 'tooltip');
+      document.body.appendChild(noteTipEl);
+    }
+    const t = n.note.trim();
+    noteTipEl.textContent = t.length > 240 ? t.slice(0, 240) + '…' : t;
+    noteTipEl.hidden = false;
+    const r = icon.getBoundingClientRect();
+    positionFloating(noteTipEl, r.left - 4, r.bottom + 6);
+  }, 250);
+}
+function hideNoteTip() {
+  clearTimeout(noteTipTimer);
+  if (noteTipEl) noteTipEl.hidden = true;
 }
 
 /* The notes panel: the side panel opened on its Note tab, which follows
