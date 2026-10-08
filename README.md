@@ -161,7 +161,9 @@ after node and keep writing. Some browsers keep `Ctrl` + `5` for switching tabs;
 item always works, and so does the shortcut in the installed app.
 
 **Attachments** — attach any file to a node (PDF, Word, Excel, PowerPoint, images, ZIP, any
-size) with **Attach file** in the note box. Files go straight from the browser into your own
+size) with **Attach files** in the note box (pick several at once), attach a whole folder with
+**Folder** (its subfolders are kept, and it shows as one attachment that opens in Drive), or
+drag files and folders onto the note box. Files go straight from the browser into your own
 Google Drive, in a folder called *MindNote Attachments* with one sub-folder per map; the map
 itself keeps only each file's name, size, date and Drive id, so it stays small. A node with
 files shows a 📎. **Open** takes Word, Excel and PowerPoint files to Google's editor in their

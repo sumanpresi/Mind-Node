@@ -164,11 +164,11 @@
   /* --------------------------- upload ------------------------------- */
   /* Returns a handle with .cancel() and a .done promise that resolves with
      the Drive file record. Progress is reported as a 0..1 fraction. */
-  function upload(file, docId, docName, nodeId, onProgress) {
+  function upload(file, docId, docName, nodeId, onProgress, intoFolder) {
     let xhr = null, cancelled = false;
     const done = (async () => {
       if (!hasToken()) throw Object.assign(new Error('Not connected to Google Drive'), { code: 'auth' });
-      const parent = await folderFor(docId, docName);
+      const parent = intoFolder || await folderFor(docId, docName);
       const type = file.type || 'application/octet-stream';
       let start;
       try {
@@ -247,6 +247,12 @@
     return { done, cancel: () => { cancelled = true; if (xhr) try { xhr.abort(); } catch (e) { } } };
   }
 
+  /* A new folder inside another — used to rebuild an uploaded folder's
+     own structure in Drive. Returns the folder's file record. */
+  const makeFolder = (name, parent, nodeId) => api('POST', `/files?fields=${q(FIELDS)}`, {
+    name, mimeType: FOLDER, parents: [parent], appProperties: nodeId ? { mnNode: nodeId } : undefined
+  });
+
   /* ------------------------ file operations ------------------------- */
   const info = id => api('GET', `/files/${id}?fields=${q(FIELDS)}`);
   const rename = (id, name) => api('PATCH', `/files/${id}?fields=${q(FIELDS)}`, { name });
@@ -274,6 +280,7 @@
      several Google accounts opens the right one. */
   function openUrl(f) {
     const id = encodeURIComponent(f.driveId), m = f.mime || '';
+    if (m === FOLDER) return driveUrl(f);
     if (m === 'application/vnd.google-apps.document') return join(`https://docs.google.com/document/d/${id}/edit`, who());
     if (m === 'application/vnd.google-apps.spreadsheet') return join(`https://docs.google.com/spreadsheets/d/${id}/edit`, who());
     if (m === 'application/vnd.google-apps.presentation') return join(`https://docs.google.com/presentation/d/${id}/edit`, who());
@@ -282,11 +289,14 @@
     if (OFFICE.slide.includes(m)) return join(`https://docs.google.com/presentation/d/${id}/edit?rtpof=true&sd=true`, who());
     return driveUrl(f);
   }
-  const driveUrl = f => join(`https://drive.google.com/file/d/${encodeURIComponent(f.driveId)}/view`, who());
+  const driveUrl = f => (f.mime === FOLDER)
+    ? join(`https://drive.google.com/drive/folders/${encodeURIComponent(f.driveId)}`, who())
+    : join(`https://drive.google.com/file/d/${encodeURIComponent(f.driveId)}/view`, who());
   const downloadUrl = f => join(`https://drive.google.com/uc?export=download&id=${encodeURIComponent(f.driveId)}`, who());
 
   window.MNDrive = {
     preload, signIn, signOut, hasToken, upload, info, rename, trash,
+    folderFor, makeFolder, FOLDER,
     openUrl, driveUrl, downloadUrl,
     account: () => account
   };

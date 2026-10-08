@@ -1,4 +1,16 @@
-# Changes — v27 (8 October 2026)
+# Changes — v28 (8 October 2026)
+
+- **Attach files** picks several files at once (Ctrl- or Shift-click in the picker).
+- **Folder** attaches a whole folder: it is rebuilt in Google Drive with its subfolders,
+  sent file by file with one overall progress bar ("12 of 40 files"), and appears on the node
+  as a single attachment that opens the folder in Drive. It is recorded only when every file
+  has arrived; after a failure, Retry carries on without re-sending finished files; Cancel
+  moves the half-sent folder to Drive's bin.
+- **Drag and drop** files or folders onto the note box. If Google Drive is not connected yet,
+  an "Upload …" button appears (sign-in needs a click). A file dropped anywhere else no longer
+  makes the browser leave MindNote to display it.
+
+# v27 (8 October 2026)
 
 ## Attachments in Google Drive
 

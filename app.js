@@ -3238,8 +3238,12 @@ function openNotePopover(id) {
   picIn.type = 'file'; picIn.accept = 'image/*'; picIn.hidden = true;
   const docIn = document.createElement('input');
   docIn.type = 'file'; docIn.multiple = true; docIn.hidden = true;
-  box.appendChild(picIn); box.appendChild(docIn);
+  const dirIn = document.createElement('input');
+  dirIn.type = 'file'; dirIn.hidden = true;
+  dirIn.setAttribute('webkitdirectory', ''); dirIn.setAttribute('directory', '');
+  box.appendChild(picIn); box.appendChild(docIn); box.appendChild(dirIn);
   const docId = S.active;
+  let dropped = null;          // files dragged in before Google Drive was connected
   const paintAttach = () => {
     const live = N(id);
     attach.innerHTML = '';
@@ -3247,18 +3251,43 @@ function openNotePopover(id) {
     add.type = 'button';
     add.className = 'np-attach-btn np-add-file';
     add.innerHTML = CLIP_ICON;
-    add.appendChild(document.createTextNode('Attach file'));
-    add.title = 'Attach any file — it is stored in your Google Drive';
-    add.addEventListener('click', () => {
+    add.appendChild(document.createTextNode('Attach files'));
+    add.title = 'Attach one or more files (Ctrl- or Shift-click to pick several) — stored in your Google Drive. You can also drop files here.';
+    /* Picking needs a click; so does Google's sign-in window. The first
+       click signs in, the next one opens the picker. */
+    const pick = (input, btn, what) => {
       if (!window.MNDrive) { toast('Attachments are not available here'); return; }
       if (!navigator.onLine) { toast('Google Drive is unavailable offline — your notes are safe'); return; }
-      if (MNDrive.hasToken()) { docIn.click(); return; }
+      if (MNDrive.hasToken()) { input.click(); return; }
       MNDrive.signIn().then(() => {
-        toast('Google Drive connected — now choose the file');
-        add.classList.add('is-ready');
+        toast('Google Drive connected — now choose the ' + what);
+        btn.classList.add('is-ready');
       }).catch(e => { if (e.message !== 'superseded') toast(e.message); });
-    });
+    };
+    add.addEventListener('click', () => pick(docIn, add, 'files'));
     attach.appendChild(add);
+
+    const dirBtn = document.createElement('button');
+    dirBtn.type = 'button';
+    dirBtn.className = 'np-attach-btn np-add-dir';
+    dirBtn.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true" class="dir-ic"><path d="M2.5 5.5a1.5 1.5 0 0 1 1.5-1.5h3.6l1.8 2h6.6a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H4a1.5 1.5 0 0 1-1.5-1.5z"/></svg>';
+    dirBtn.appendChild(document.createTextNode('Folder'));
+    dirBtn.title = 'Attach a whole folder, subfolders included — it becomes one attachment that opens in Google Drive';
+    dirBtn.addEventListener('click', () => pick(dirIn, dirBtn, 'folder'));
+    attach.appendChild(dirBtn);
+
+    if (dropped) {
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.className = 'np-attach-btn np-add-file is-ready';
+      go.textContent = `Upload ${dropped.label}`;
+      go.title = 'Connect Google Drive and upload what you dropped';
+      go.addEventListener('click', () => withDrive(() => {
+        const d = dropped; dropped = null; paintAttach();
+        sendDropped(d);
+      }));
+      attach.appendChild(go);
+    }
 
     const src = live ? imageSrcFor(live) : '';
     const pic = document.createElement('button');
@@ -3300,6 +3329,42 @@ function openNotePopover(id) {
     const list = Array.from(docIn.files || []);
     docIn.value = '';
     list.forEach(f => startUpload(docId, id, f));
+  });
+  dirIn.addEventListener('change', () => {
+    const list = Array.from(dirIn.files || []);
+    dirIn.value = '';
+    if (!list.length) { toast('That folder is empty'); return; }
+    const top = (list[0].webkitRelativePath || '').split('/')[0] || 'Folder';
+    startFolderUpload(docId, id, top, list.map(f => ({ file: f, path: f.webkitRelativePath || f.name })));
+  });
+
+  /* Files and folders dropped onto the box */
+  const sendDropped = d => {
+    d.files.forEach(f => startUpload(docId, id, f));
+    d.folders.forEach(fd => startFolderUpload(docId, id, fd.name, fd.items));
+  };
+  box.addEventListener('dragover', e => {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+    box.classList.add('is-drop');
+  });
+  box.addEventListener('dragleave', e => { if (!box.contains(e.relatedTarget)) box.classList.remove('is-drop'); });
+  box.addEventListener('drop', e => {
+    if (!e.dataTransfer) return;
+    e.preventDefault();
+    box.classList.remove('is-drop');
+    readDropped(e.dataTransfer).then(d => {
+      if (!d.files.length && !d.folders.length) return;
+      if (!window.MNDrive) { toast('Attachments are not available here'); return; }
+      if (MNDrive.hasToken()) { sendDropped(d); return; }
+      /* signing in needs a click, which a drop is not — so offer one */
+      const parts = [];
+      if (d.files.length) parts.push(d.files.length + ' file' + (d.files.length === 1 ? '' : 's'));
+      if (d.folders.length) parts.push(d.folders.length + ' folder' + (d.folders.length === 1 ? '' : 's'));
+      dropped = Object.assign(d, { label: parts.join(' and ') });
+      paintAttach();
+      toast('Click “Upload ' + dropped.label + '” to connect Google Drive and send them');
+    });
   });
   paintAttach();
 
@@ -3429,6 +3494,7 @@ const missingFiles = new Set();   // Drive ids found to be gone or in the bin
 const filesOf = n => (n && Array.isArray(n.files)) ? n.files : [];
 function fileKind(f) {
   const m = (f.mime || '').toLowerCase(), ext = ((f.name || '').split('.').pop() || '').toLowerCase();
+  if (m === 'application/vnd.google-apps.folder' || f.folder) return ['dir', 'DIR'];
   if (m === 'application/pdf' || ext === 'pdf') return ['pdf', 'PDF'];
   if (m.startsWith('image/')) return ['img', ext && ext.length <= 4 ? ext.toUpperCase() : 'IMG'];
   if (/wordprocessing|msword|google-apps.document|opendocument.text|rtf/.test(m) || /^(docx?|odt|rtf)$/.test(ext)) return ['doc', ext && ext.length <= 4 ? ext.toUpperCase() : 'DOC'];
@@ -3503,6 +3569,131 @@ function startUpload(docId, nodeId, file) {
   };
   u.run();
 }
+/* A whole folder: rebuilt in Drive with its subfolders, sent one file at
+   a time, and recorded on the node as a single attachment that opens the
+   folder in Drive — only once every file has arrived. A failure keeps
+   what was sent and Retry carries on from there; Cancel moves the
+   half-sent folder to Drive's bin so nothing incomplete is left behind. */
+function startFolderUpload(docId, nodeId, topName, items) {
+  const k = docId + ':' + nodeId;
+  const list = uploads[k] || (uploads[k] = []);
+  const total = items.reduce((a, it) => a + (it.file.size || 0), 0);
+  if (items.length > 300 && !window.confirm(`"${topName}" holds ${items.length} files (${fileSizeText(total)}). Upload all of them to Google Drive?`)) return;
+  const u = { key: uid(), name: topName, size: total, frac: 0, error: null, handle: null, folder: true,
+              detail: `0 of ${items.length} files` };
+  list.push(u);
+  const sent = new Set();          // paths already in Drive
+  const dirIds = {};               // folder path -> Drive folder id (a promise)
+  let topId = null, cancelled = false, current = null;
+  const dropRow = () => {
+    const l = uploads[k]; if (!l) return;
+    const i = l.indexOf(u); if (i >= 0) l.splice(i, 1);
+    if (!l.length) delete uploads[k];
+  };
+  const showProgress = () => {
+    const row = document.querySelector(`#notePop [data-up="${u.key}"]`);
+    if (!row) return;
+    const bar = row.querySelector('.np-bar i'); if (bar) bar.style.width = Math.round(u.frac * 100) + '%';
+    const meta = row.querySelector('.np-fmeta'); if (meta) meta.textContent = u.detail + ' · ' + fileSizeText(total);
+  };
+  const dirFor = path => {
+    const parts = path.split('/').slice(1, -1);          // drop the top folder and the file name
+    let chain = Promise.resolve(topId), sofar = '';
+    for (const part of parts) {
+      const key = (sofar = sofar ? sofar + '/' + part : part);
+      const parentP = chain;
+      chain = dirIds[key] || (dirIds[key] = parentP.then(pid => MNDrive.makeFolder(part, pid).then(r => r.id)));
+      chain.catch(() => { delete dirIds[key]; });
+    }
+    return chain;
+  };
+  u.handle = { cancel: () => {
+    cancelled = true;
+    if (current) current.cancel();
+  } };
+  u.run = async () => {
+    u.error = null;
+    repaintFilesFor(docId, nodeId);
+    try {
+      if (!topId) {
+        const d = S.docs[docId];
+        const mapFolder = await MNDrive.folderFor(docId, d ? d.name : 'Untitled map');
+        topId = (await MNDrive.makeFolder(topName, mapFolder, nodeId)).id;
+      }
+      let done = items.filter(it => sent.has(it.path)).reduce((a, it) => a + (it.file.size || 0), 0);
+      for (const it of items) {
+        if (cancelled) throw Object.assign(new Error('Upload cancelled'), { code: 'cancel' });
+        if (sent.has(it.path)) continue;
+        const parent = await dirFor(it.path);
+        const d = S.docs[docId];
+        current = MNDrive.upload(it.file, docId, d ? d.name : '', nodeId, f => {
+          u.frac = total ? (done + f * (it.file.size || 0)) / total : 1; showProgress();
+        }, parent);
+        await current.done;
+        current = null;
+        sent.add(it.path);
+        done += it.file.size || 0;
+        u.frac = total ? done / total : sent.size / items.length;
+        u.detail = `${sent.size} of ${items.length} files`;
+        showProgress();
+      }
+      dropRow();
+      const ok = changeFiles(docId, nodeId, files => files.concat([{
+        id: uid(), driveId: topId, name: topName, mime: MNDrive.FOLDER,
+        size: total, count: items.length, modified: new Date().toISOString()
+      }]));
+      toast(ok ? `Folder "${topName}" attached — ${items.length} files` : `"${topName}" is in your Google Drive, but its node no longer exists`);
+    } catch (e) {
+      current = null;
+      if (e.code === 'cancel' || cancelled) {
+        dropRow();
+        if (topId) MNDrive.trash(topId).catch(() => { });
+        toast(`Upload of "${topName}" cancelled — the part already sent was moved to the Drive bin`);
+      } else {
+        u.error = (e.message || 'Upload failed') + ` (${sent.size} of ${items.length} files sent; Retry carries on)`;
+      }
+    }
+    repaintFilesFor(docId, nodeId);
+  };
+  u.run();
+}
+
+/* What was dropped: plain files, and folders read through their entries
+   (a folder arrives as an entry, not as a file). */
+async function readDropped(dt) {
+  const out = { files: [], folders: [] };
+  const items = Array.from(dt.items || []);
+  const entries = items.map(it => it.webkitGetAsEntry ? it.webkitGetAsEntry() : null);
+  if (!entries.some(Boolean)) { out.files = Array.from(dt.files || []); return out; }
+  const fileOf = entry => new Promise((res, rej) => entry.file(res, rej));
+  const readAll = reader => new Promise((res, rej) => {
+    const acc = [];
+    const next = () => reader.readEntries(batch => { if (!batch.length) res(acc); else { acc.push(...batch); next(); } }, rej);
+    next();
+  });
+  const walk = async (entry, path, into) => {
+    if (entry.isFile) { into.push({ file: await fileOf(entry), path: path + entry.name }); return; }
+    if (entry.isDirectory) {
+      for (const child of await readAll(entry.createReader())) await walk(child, path + entry.name + '/', into);
+    }
+  };
+  for (let i = 0; i < entries.length; i++) {
+    const en = entries[i];
+    if (!en) continue;
+    try {
+      if (en.isDirectory) {
+        const list = [];
+        await walk(en, '', list);
+        if (list.length) out.folders.push({ name: en.name, items: list });
+        else toast(`"${en.name}" is empty`);
+      } else {
+        out.files.push(await fileOf(en));
+      }
+    } catch (e) { toast('Could not read ' + en.name); }
+  }
+  return out;
+}
+
 function repaintFilesFor(docId, nodeId) {
   if (notePopFiles && notePopFiles.docId === docId && notePopFiles.id === nodeId) notePopFiles.paint();
 }
@@ -3594,12 +3785,12 @@ function paintFileList(host, docId, nodeId, relayout) {
     const meta = document.createElement('div');
     meta.className = 'np-fmeta';
     meta.textContent = gone ? 'Not found in Google Drive — moved to the bin or deleted'
-      : [fileSizeText(f.size), fileDateText(f.modified)].filter(Boolean).join(' · ');
+      : [f.count ? `${f.count} file${f.count === 1 ? '' : 's'}` : '', fileSizeText(f.size), fileDateText(f.modified)].filter(Boolean).join(' · ');
     main.appendChild(nm); main.appendChild(meta);
     row.appendChild(main);
 
     if (!gone) {
-      row.appendChild(btn('Open', 'Open ' + f.name + ' in a new tab', () => {
+      row.appendChild(btn('Open', (fileKind(f)[0] === 'dir' ? 'Open the folder ' : 'Open ') + f.name + ' in a new tab', () => {
         window.open(MNDrive.openUrl(f), '_blank', 'noopener');
       }, 'is-main'));
       row.appendChild(btn('Drive', 'Show it in Google Drive', () => {
@@ -3614,7 +3805,7 @@ function paintFileList(host, docId, nodeId, relayout) {
     const row = document.createElement('div');
     row.className = 'np-file is-uploading' + (u.error ? ' is-error' : '');
     row.dataset.up = u.key;
-    row.appendChild(badge({ name: u.name, mime: '' }));
+    row.appendChild(badge({ name: u.name, mime: '', folder: u.folder }));
     const main = document.createElement('div');
     main.className = 'np-fmain';
     const nm = document.createElement('div');
@@ -3630,7 +3821,8 @@ function paintFileList(host, docId, nodeId, relayout) {
       bar.innerHTML = `<i style="width:${Math.round(u.frac * 100)}%"></i>`;
       main.appendChild(bar);
       const meta = document.createElement('div');
-      meta.className = 'np-fmeta'; meta.textContent = 'Uploading ' + fileSizeText(u.size) + ' to Google Drive…';
+      meta.className = 'np-fmeta';
+      meta.textContent = u.folder ? u.detail + ' · ' + fileSizeText(u.size) : 'Uploading ' + fileSizeText(u.size) + ' to Google Drive…';
       main.appendChild(meta);
     }
     row.appendChild(main);
@@ -3669,13 +3861,14 @@ function openFileMenu(anchorBtn, row, docId, nodeId, f, gone) {
   if (!gone) {
     item('Open', () => window.open(MNDrive.openUrl(f), '_blank', 'noopener'));
     item('Open in Google Drive', () => window.open(MNDrive.driveUrl(f), '_blank', 'noopener'));
+    const isDir = fileKind(f)[0] === 'dir';
     item('Copy link', () => {
-      const url = `https://drive.google.com/file/d/${f.driveId}/view`;
+      const url = isDir ? `https://drive.google.com/drive/folders/${f.driveId}` : `https://drive.google.com/file/d/${f.driveId}/view`;
       const done = () => toast('Link copied — it opens only for people the file is shared with');
       if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, () => window.prompt('Copy this link', url));
       else window.prompt('Copy this link', url);
     });
-    item('Download', () => window.open(MNDrive.downloadUrl(f), '_blank', 'noopener'));
+    if (!isDir) item('Download', () => window.open(MNDrive.downloadUrl(f), '_blank', 'noopener'));
     item('Rename…', () => withDrive(() => {
       const name = window.prompt('New name for the file', f.name);
       if (!name || !name.trim() || name.trim() === f.name) return;
@@ -6070,6 +6263,18 @@ function wire() {
     try { if (commitEditor) commitEditor(); } catch (e) { }
     if (persistPending) persistNow();
   };
+  /* A file dropped anywhere but the note box would make the browser
+     leave MindNote to show it. Catch it and say where it goes instead. */
+  const isFileDrag = e => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+  window.addEventListener('dragover', e => {
+    if (isFileDrag(e) && !(e.target.closest && e.target.closest('#notePop'))) { e.preventDefault(); e.dataTransfer.dropEffect = 'none'; }
+  });
+  window.addEventListener('drop', e => {
+    if (isFileDrag(e) && !(e.target.closest && e.target.closest('#notePop'))) {
+      e.preventDefault();
+      toast('To attach files, open a node\u2019s note and drop them there');
+    }
+  });
   window.addEventListener('pagehide', flushNow);
   window.addEventListener('beforeunload', flushNow);
   document.addEventListener('visibilitychange', () => {
