@@ -547,12 +547,10 @@ button{cursor:pointer;background:none;border:0}
   }
 }.n-note-ic{
   display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
-  width:22px;height:22px;border-radius:6px;cursor:pointer;
+  width:24px;height:24px;border-radius:6px;cursor:pointer;transition:transform .12s ease;
 }
-.n-note-ic svg{width:18px;height:18px;display:block}
-.n-note-ic .pg{fill:var(--surface);stroke:var(--line);stroke-width:1.3}
-.n-note-ic .ln{fill:none;stroke:var(--nc);stroke-width:1.5;stroke-linecap:round}
-.n-note-ic:hover .pg{stroke:var(--nc);fill:var(--paper)}
+.n-note-ic .note-svg{width:20px;height:20px;display:block}
+.n-note-ic:hover{background:var(--paper);transform:scale(1.15)}
 .n-tags{display:flex;gap:3px}
 .n-tag{height:5px;width:16px;border-radius:3px;flex:0 0 16px}
 .n-fold{

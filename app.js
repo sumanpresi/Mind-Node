@@ -1447,6 +1447,20 @@ function childSide(id) {
   return (P[kids[0]].x >= P[id].x) ? 1 : -1;
 }
 
+/* The note marker: a spiral notepad (orange top, ruled lines) with a
+   yellow pencil, drawn small enough to sit inside a node. Fixed colours,
+   so it reads the same on every branch colour and in dark mode. */
+const NOTE_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true" class="note-svg">' +
+  '<path d="M4.5 5h10a1.5 1.5 0 0 1 1.5 1.5V20a1 1 0 0 1-1 1H4.5A1.5 1.5 0 0 1 3 19.5v-13A1.5 1.5 0 0 1 4.5 5z" fill="#fff" stroke="#23232f" stroke-width="1.5" stroke-linejoin="round"/>' +
+  '<path d="M4.5 5h10a1.5 1.5 0 0 1 1.5 1.5V9H3V6.5A1.5 1.5 0 0 1 4.5 5z" fill="#f6a56f" stroke="#23232f" stroke-width="1.5" stroke-linejoin="round"/>' +
+  '<path d="M6.5 3.2v3.6M9.5 3.2v3.6M12.5 3.2v3.6" stroke="#23232f" stroke-width="1.5" stroke-linecap="round"/>' +
+  '<path d="M6 12.2h7M6 15h7M6 17.8h4" stroke="#23232f" stroke-width="1.5" stroke-linecap="round"/>' +
+  '<path d="M19.3 8.2l2.2 1.6-6.2 8.6-2.2-1.6z" fill="#fcd34d" stroke="#23232f" stroke-width="1.3" stroke-linejoin="round"/>' +
+  '<path d="M13.1 16.8l2.2 1.6-2.6 1.6z" fill="#fde7b0" stroke="#23232f" stroke-width="1.3" stroke-linejoin="round"/>' +
+  '<path d="M19.3 8.2l.9-1.3a1 1 0 0 1 1.4-.2l.8.6a1 1 0 0 1 .2 1.4l-.9 1.1z" fill="#f26b5b" stroke="#23232f" stroke-width="1.3" stroke-linejoin="round"/>' +
+  '</svg>';
+
 function buildNodeEl(id) {
   const d = doc(), n = N(id), c = colorOf(id);
   const el = document.createElement('div');
@@ -1504,12 +1518,11 @@ function buildNodeEl(id) {
   head.appendChild(txt);
 
   const meta = [];
-  if (UI.showNotes && n.note.trim()) {
-    /* a small page with lines on it: hovering shows the note, a click
-       opens it beside the node */
-    meta.push(`<span class="n-note-ic" data-note="${id}" role="button" aria-label="Open note">` +
-      `<svg viewBox="0 0 18 18" aria-hidden="true"><rect class="pg" x="1.5" y="1.5" width="15" height="15" rx="3.5"/>` +
-      `<path class="ln" d="M5.5 6h7M5.5 9h7M5.5 12h4.5"/></svg></span>`);
+  if (n.note && n.note.trim()) {
+    /* A notepad with a pencil: always shown on a node that carries a note,
+       whatever the view settings, so a note can never go unnoticed.
+       Hovering shows the note; a click opens it beside the node. */
+    meta.push(`<span class="n-note-ic" data-note="${id}" role="button" aria-label="Open note">${NOTE_ICON}</span>`);
   }
   if (n.link && S.docs[n.link]) meta.push(`<span class="n-link-ic" data-link="${id}" title="Open linked document">🔗</span>`);
   meta.push(`<span class="n-url-ic link-manage${headerLinked ? ' has-url' : ''}" data-linkbtn="${id}" title="${headerLinked ? 'Edit link' : 'Add link'}">${headerLinked ? '↗' : '🔗'}</span>`);
@@ -3945,6 +3958,18 @@ function olNode(id, lvl) {
   txt.addEventListener('click', () => { UI.selected = id; render(); });
   txt.addEventListener('dblclick', () => editOutline(id, txt));
   row.appendChild(txt);
+
+  /* with note text hidden, the notepad still says a note is there */
+  if (n.note && n.note.trim() && !UI.showNotes) {
+    const ni = document.createElement('button');
+    ni.type = 'button';
+    ni.className = 'n-note-ic ol-note-ic';
+    ni.setAttribute('aria-label', 'Open note');
+    ni.title = n.note.trim().slice(0, 240);
+    ni.innerHTML = NOTE_ICON;
+    ni.addEventListener('click', e => { e.stopPropagation(); openNotePopover(id); });
+    row.appendChild(ni);
+  }
 
   const linkBtn = document.createElement('button');
   linkBtn.type = 'button';

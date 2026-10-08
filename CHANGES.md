@@ -1,4 +1,12 @@
-# Changes — v25 (8 October 2026)
+# Changes — v26 (8 October 2026)
+
+- **Notes are always marked.** A node with a note now always shows a small notepad-and-
+  pencil icon. Before, the marker was hidden whenever the toolbar's Notes toggle was off,
+  which made notes impossible to spot. That toggle now only controls whether note text is
+  printed under each row in the Outline view; when it is off, the Outline shows the same
+  notepad icon instead. Hover the icon for a preview, click it to open the note.
+
+# v25 (8 October 2026)
 
 ## Notes, the MindNode way
 
