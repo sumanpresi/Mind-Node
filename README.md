@@ -157,11 +157,30 @@ open it.
 **Visual tags** — create tags in the inspector, then use the sun icon beside a tag to
 spotlight everything carrying it and fade the rest.
 
-**Connections** — select a node, press the link tool, then tap a second node to draw a
-relationship that ignores the hierarchy. Click a connection line to remove it.
+**Connections** — once the main structure is there, you will notice relationships between
+ideas on different branches. A connection draws the link without touching the hierarchy.
+
+To make one: select a node, press the link tool, then tap the second node. With a mouse
+you can instead drag straight from one node to the other — a line follows the pointer and
+the node you are over is picked out, so you can see where it will land before you let go.
+
+To change one: click or tap the connection to select it. A waypoint appears in the middle
+— drag it to give the line the curve you want, and double-click or double-tap it to pull
+the line straight again. The bar that appears offers the same, along with a title and
+removal. Double-clicking the connection itself goes straight to naming it, and the name is
+drawn along the line. Connections are listed in the Data panel, where a row selects the
+connection on the map and the ✕ removes it.
+
+The shape is remembered as a proportion of the line rather than as a spot on the canvas,
+so a curve you set keeps its shape as the nodes move around.
 
 **Link documents** — point a node at another document. It gets a 🔗 you can tap to jump
 straight there.
+
+**Tapered branches** — in the Document panel, under Branch width. Branches leave the
+centre thick and thin out towards the edges, the way a twig does. Each line becomes a
+filled shape rather than an even stroke. Dashed and dotted branches keep their even line,
+and so do elbows, where a taper only blurs the corners.
 
 **Focus mode** — dims everything except the selected node, its branch and its path back
 to the centre. Useful when presenting.
@@ -389,3 +408,32 @@ seconds while you are working, drops to 45 seconds after a couple of quiet minut
 **Export** in the sidebar still saves a `.json` backup of everything, and **Import**
 brings it back. Worth doing occasionally: browser storage can be cleared by the browser
 itself, and the free Redis plan is not a backup service.
+
+**Bringing work in from elsewhere.** Import takes more than its own backups:
+
+| Dropped in | What happens |
+|---|---|
+| `.mindnode` | A MindNode document opens with its branches, colours, folded sections, tick boxes and tags. Classic documents only — see below. |
+| `.opml` | An outline from almost any mind mapper or outliner, notes included. |
+| `.md` | Headings become branches, bullets become their children, `- [x]` becomes a ticked item, `> ` lines become notes, and a trailing `#tag` becomes a tag. |
+| `.txt` | Indented lines, by tabs or by spaces. Lines at the same indent end up as siblings whichever is used. |
+
+The kind of file is worked out from what is inside it, not from the name, so a renamed
+file still opens. A file that cannot be read is refused with a reason and changes nothing:
+the document is built in full before it joins the workspace, so a failure halfway leaves
+no half-import behind. Files over 24 MB are refused before any of this starts, and a map
+nested more than a thousand levels deep — which no real map is — has the deepest parts
+brought up to that level rather than being dropped, because past about two thousand the
+map can no longer be drawn. The zip and the property list inside a MindNode document are read by
+the app itself; there is still no library in here to go stale.
+
+MindNode's newer **"MindNode Next"** documents keep their map in an undocumented binary
+and cannot be read. Open one in MindNode and export it as *MindNode Classic* first.
+Attachments and stickers are left behind in either case — they are PDFs, which a node
+cannot show.
+
+**Saving a copy out.** The Document panel offers the same formats in reverse: a MindNote
+file, Markdown, OPML, plain text, and Print, whose "Save as PDF" destination gives a PDF
+without this app carrying a PDF writer around. Notes, tick boxes, tags and markers travel
+wherever the format has somewhere to put them — what MindNote writes as Markdown, it can
+read back as the same outline.

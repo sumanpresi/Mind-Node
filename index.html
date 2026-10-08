@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=20" />
+<link rel="stylesheet" href="styles.css?v=23" />
 </head>
 <body>
 
@@ -65,7 +65,7 @@
       <button class="rail-btn rail-only" id="railTheme" data-tip="Theme" aria-label="Theme">
         <svg viewBox="0 0 20 20" class="ic"><circle cx="10" cy="10" r="6"/><path d="M10 4a6 6 0 000 12z" fill="currentColor" stroke="none"/></svg>
       </button>
-      <input type="file" id="importFile" accept="application/json" hidden />
+      <input type="file" id="importFile" accept=".json,.mindnode,.zip,.opml,.md,.markdown,.txt,.text,application/json,text/plain,text/markdown,text/x-opml" hidden />
       <button class="sync-strip" id="syncBtn" data-state="off" data-tip="Sync">
         <span class="sync-dot"></span><span class="sync-text wide-only">Sync is off</span>
       </button>
@@ -209,7 +209,7 @@
   <div id="toast" hidden></div>
 </div>
 
-<script src="app.js?v=20"></script>
-<script src="sync.js?v=20"></script>
+<script src="app.js?v=23"></script>
+<script src="sync.js?v=23"></script>
 </body>
 </html>
