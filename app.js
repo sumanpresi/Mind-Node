@@ -4584,6 +4584,8 @@ function mindNodeToDocs(plist, fallbackName) {
     let rootId = null;
     let tasksSeen = 0;
 
+    /* Walked with a stack rather than by calling itself, so an unusually
+       deep map is read instead of exhausting the call stack. */
     const take = (mn, parentId, inheritedColour) => {
       const n = mkNode(parentId, htmlToText((mn.title || {}).text));
       const stroke = ((mn.pathStyle || {}).strokeStyle || {}).color;
@@ -4602,13 +4604,23 @@ function mindNodeToDocs(plist, fallbackName) {
       if (tagIds.length) n.tags = tagIds;
       nodes[n.id] = n;
       if (!parentId) rootId = n.id;
-      (mn.subnodes || []).forEach(sub => {
-        const kid = take(sub, n.id, mine || inheritedColour);
-        n.children.push(kid.id);
-      });
-      return n;
+      if (parentId) nodes[parentId].children.push(n.id);
+      return { node: n, colour: mine || inheritedColour };
     };
-    take(map.mainNode || {}, null, null);
+    const pending = [{ mn: map.mainNode || {}, parentId: null, colour: null, depth: 0 }];
+    while (pending.length) {
+      const job = pending.pop();
+      const { node, colour } = take(job.mn, job.parentId, job.colour);
+      const subs = job.mn.subnodes || [];
+      /* anything past the limit hangs where it is rather than deeper */
+      let next = job.depth + 1;
+      if (next > MAX_IMPORT_DEPTH) { next = MAX_IMPORT_DEPTH; deepeningTrimmed = true; }
+      const under = next > job.depth ? node.id : (job.parentId || node.id);
+      /* pushed in reverse so they come back off the stack in order */
+      for (let i = subs.length - 1; i >= 0; i--) {
+        pending.push({ mn: subs[i], parentId: under, colour, depth: next });
+      }
+    }
 
     const name = nodes[rootId].text || fallbackName || 'Imported map';
     const doc = {
@@ -4659,6 +4671,13 @@ async function importMindNode(buf, fileName) {
    All three are the same idea — a list of lines, each with a depth — so
    they are turned into that shape and then into a document by one piece
    of code. */
+/* Laying out and drawing a map walks it by calling into itself, which runs
+   out of room somewhere past two thousand levels. No real map is anywhere
+   near that, so anything deeper is brought up to this level rather than
+   refused: the document still opens, and nothing in it is thrown away. */
+const MAX_IMPORT_DEPTH = 1000;
+let deepeningTrimmed = false;
+
 function docFromOutline(rows, name) {
   if (!rows.length) throw new Error('nothing in that file');
   const nodes = {};
@@ -4686,11 +4705,15 @@ function docFromOutline(rows, name) {
     }
     return found.id;
   };
-  /* the deepest node seen at each level, so a row can find its parent */
-  const atDepth = { [start ? 0 : -1]: root };
+  /* The deepest node seen at each level, so a row can find its parent.
+     The root sits at level -1 whether it came from the file or was made
+     here, and every other row counts up from zero — without that the
+     second of three unindented lines ended up inside the first. */
+  const atDepth = { '-1': root };
   for (let i = start; i < rows.length; i++) {
     const r = rows[i];
-    let d = r.depth + (start ? 0 : 1);
+    let d = Math.max(0, r.depth - start);
+    if (d > MAX_IMPORT_DEPTH) { d = MAX_IMPORT_DEPTH; deepeningTrimmed = true; }
     /* a jump of more than one level is pulled back to the next one down */
     while (d > 0 && !atDepth[d - 1]) d--;
     const parent = atDepth[d - 1] || root;
@@ -4715,17 +4738,21 @@ function rowsFromOPML(text) {
   if (xml.querySelector('parsererror')) throw new Error('that OPML could not be read');
   const body = xml.querySelector('body') || xml.documentElement;
   const rows = [];
-  const walk = (el, depth) => {
-    [...el.children].filter(c => c.tagName.toLowerCase() === 'outline').forEach(c => {
-      rows.push({
-        depth,
-        text: c.getAttribute('text') || c.getAttribute('title') || '',
-        note: c.getAttribute('_note') || c.getAttribute('note') || ''
-      });
-      walk(c, depth + 1);
+  /* Walked with a stack rather than by calling itself, so an outline
+     nested a few thousand deep is read rather than exhausting the
+     browser's call stack halfway through. */
+  const kidsOfEl = el => [...el.children].filter(c => c.tagName.toLowerCase() === 'outline');
+  const stack = kidsOfEl(body).reverse().map(el => ({ el, depth: 0 }));
+  while (stack.length) {
+    const { el, depth } = stack.pop();
+    rows.push({
+      depth,
+      text: el.getAttribute('text') || el.getAttribute('title') || '',
+      note: el.getAttribute('_note') || el.getAttribute('note') || ''
     });
-  };
-  walk(body, 0);
+    const kids = kidsOfEl(el);
+    for (let i = kids.length - 1; i >= 0; i--) stack.push({ el: kids[i], depth: depth + 1 });
+  }
   const title = (xml.querySelector('head > title') || {}).textContent || '';
   return { rows, name: title.trim() };
 }
@@ -4800,12 +4827,24 @@ function addImportedDocs(docs, what) {
   if (docs.length) { S.active = docs[0].id; UI.selected = null; }
   primeSigs(); save(); render();
   const n = docs.reduce((a, d) => a + Object.keys(d.nodes).length, 0);
-  toast(`Imported ${n} node${n === 1 ? '' : 's'}${what ? ' from ' + what : ''}`);
+  toast(deepeningTrimmed
+    ? `Imported ${n} nodes — some were nested too deeply to draw and have been brought up`
+    : `Imported ${n} node${n === 1 ? '' : 's'}${what ? ' from ' + what : ''}`);
 }
+
+/* Reading a file means holding all of it, and then the map built from it,
+   in memory at once. Past this the tab would sit frozen for long enough
+   to look broken, so it is refused with a reason instead. */
+const IMPORT_MAX_BYTES = 24 * 1024 * 1024;
 
 /* What kind of file is this? The name is a hint; the contents decide. */
 async function importAnyFile(file) {
   const name = file.name || 'file';
+  if (typeof file.size === 'number' && file.size > IMPORT_MAX_BYTES) {
+    toast(`That file is ${bytesText(file.size)} — too large to open. The limit is ${bytesText(IMPORT_MAX_BYTES)}.`);
+    return;
+  }
+  deepeningTrimmed = false;
   try {
     const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
     if (head[0] === 0x50 && head[1] === 0x4b) {          // "PK": a zip

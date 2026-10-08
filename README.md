@@ -419,7 +419,12 @@ itself, and the free Redis plan is not a backup service.
 | `.txt` | Indented lines, by tabs or by spaces. Lines at the same indent end up as siblings whichever is used. |
 
 The kind of file is worked out from what is inside it, not from the name, so a renamed
-file still opens. The zip and the property list inside a MindNode document are read by
+file still opens. A file that cannot be read is refused with a reason and changes nothing:
+the document is built in full before it joins the workspace, so a failure halfway leaves
+no half-import behind. Files over 24 MB are refused before any of this starts, and a map
+nested more than a thousand levels deep — which no real map is — has the deepest parts
+brought up to that level rather than being dropped, because past about two thousand the
+map can no longer be drawn. The zip and the property list inside a MindNode document are read by
 the app itself; there is still no library in here to go stale.
 
 MindNode's newer **"MindNode Next"** documents keep their map in an undocumented binary
