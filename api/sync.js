@@ -89,6 +89,37 @@ function unionById(listA, listB) {
   return out;
 }
 
+/* Two connection lists: one entry per id, the more recently touched copy
+   winning (the newer document's copy when neither carries a stamp). */
+function unionConnections(listA, listB) {
+  const byId = new Map();
+  for (const c of [...(listA || []), ...(listB || [])]) {
+    if (!c || !c.id) continue;
+    const have = byId.get(c.id);
+    if (!have || (c.m || 0) > (have.m || 0)) byId.set(c.id, c);
+  }
+  return [...byId.values()];
+}
+
+/* Two { id: time } tombstone maps, keeping the later time for each id and
+   dropping anything older than sixty days, at most 500 entries. */
+const TOMB_MAX_AGE = 60 * 24 * 60 * 60 * 1000;
+const TOMB_KEEP = 500;
+function mergeStamps(x, y) {
+  const all = Object.assign({}, x || {});
+  for (const [id, ts] of Object.entries(y || {})) {
+    if (!all[id] || ts > all[id]) all[id] = ts;
+  }
+  const now = Date.now();
+  const out = {};
+  Object.keys(all)
+    .filter(id => typeof all[id] === 'number' && now - all[id] < TOMB_MAX_AGE)
+    .sort((p, q) => all[q] - all[p])
+    .slice(0, TOMB_KEEP)
+    .forEach(id => { out[id] = all[id]; });
+  return out;
+}
+
 /* After a node-by-node merge the links can disagree with one another: two
    devices each added a child to the same parent, so each kept its own copy
    of that parent's children list and only one of those lists survived. A
@@ -171,15 +202,23 @@ function mergeDoc(a, b) {
     if (back) nodes[rootId] = back;
   }
 
+  /* Connections removed on either side. Without this, the union below
+     put a deleted connection straight back from whichever copy still had
+     it. A removal wins unless the connection was touched afterwards
+     (c.m), which is what undo does. */
+  const conngone = mergeStamps(a.conngone, b.conngone);
+  const connAlive = c => !((conngone[c.id] || 0) > (c.m || 0));
+
   const out = Object.assign({}, newer, {
     nodes,
     root: rootId,
-    connections: unionById(newer.connections, older.connections)
-      .filter(c => nodes[c.a] && nodes[c.b]),
+    connections: unionConnections(newer.connections, older.connections)
+      .filter(c => nodes[c.a] && nodes[c.b] && connAlive(c)),
     tags: unionById(newer.tags, older.tags),
     updated: Math.max(a.updated || 0, b.updated || 0)
   });
   if (Object.keys(gone).length) out.gone = gone; else delete out.gone;
+  if (Object.keys(conngone).length) out.conngone = conngone; else delete out.conngone;
   repair(out, older);
   return out;
 }

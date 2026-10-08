@@ -828,25 +828,81 @@ function stampChanges(d, sigs) {
   return touched;
 }
 
+/* ------------------- connection stamps and tombstones ----------------
+   Connections get the same protection as nodes. Each carries c.m, the
+   last time it was added or changed here, and d.conngone records when a
+   connection was removed. The server keeps a connection only if it was
+   touched after its removal, so a connection deleted on one device is not
+   posted back by another device (or another open tab) that still has it,
+   while one brought back with undo, which is stamped afresh, survives.
+   Like the node stamps, these are worked out by comparing with the last
+   save, so every way of removing a connection is covered. */
+let connSigs = {};          // doc id -> { connection id: fingerprint }
+
+const connAlive = (c, d) => !((((d && d.conngone) || {})[c.id] || 0) > (c.m || 0));
+
+function connSigOf(c) {
+  const copy = Object.assign({}, c);
+  delete copy.m;
+  return JSON.stringify(copy);
+}
+function connBaseline(d) {
+  const sigs = {};
+  for (const c of d.connections || []) sigs[c.id] = connSigOf(c);
+  connSigs[d.id] = sigs;
+}
+function stampConns(d) {
+  if (!d || !Array.isArray(d.connections)) return;
+  const prev = connSigs[d.id];
+  const now = Date.now();
+  const sigs = {};
+  for (const c of d.connections) sigs[c.id] = connSigOf(c);
+  connSigs[d.id] = sigs;
+  if (!prev) return;                  // first save of a document just loaded
+  const gone = d.conngone || {};
+  for (const c of d.connections) {
+    if (prev[c.id] === sigs[c.id] && !gone[c.id]) continue;
+    c.m = now;                        // new, changed, or brought back by undo
+    delete gone[c.id];
+  }
+  for (const id of Object.keys(prev)) if (!sigs[id]) gone[id] = now;
+  const ids = Object.keys(gone)
+    .filter(id => now - (gone[id] || 0) < GONE_MAX_AGE)
+    .sort((a, b) => gone[b] - gone[a])
+    .slice(0, GONE_KEEP);
+  if (!ids.length) { delete d.conngone; return; }
+  const next = {};
+  for (const id of ids) next[id] = gone[id];
+  d.conngone = next;
+}
+
 function wsSig() {
   return S.order.join(',') + '|' + Object.keys(S.docs).sort().join(',') + '|' + Object.keys(deletedDocs).sort().join(',');
 }
 function primeSigs() {
   contentSigs = {};
   nodeSigs = {};
+  connSigs = {};
   Object.values(S.docs).forEach(d => {
     const fp = docFingerprint(d);
     contentSigs[d.id] = fp.sig;
     nodeSigs[d.id] = fp.sigs;
+    connBaseline(d);
   });
   workspaceSig = wsSig();
 }
+/* True from a change until it has been written out. Used so a tab that
+   has changed nothing never writes its (possibly older) copy over what
+   another tab has just saved. */
+let persistPending = false;
 function save() {
   const d = doc();
   let changed = false;
+  persistPending = true;
   const ws = wsSig();
   if (ws !== workspaceSig) { workspaceSig = ws; changed = true; }
   if (d) {
+    stampConns(d);
     const fp = docFingerprint(d);
     if (contentSigs[d.id] !== fp.sig) {
       contentSigs[d.id] = fp.sig;
@@ -864,6 +920,7 @@ function save() {
 function persistNow() {
   clearTimeout(saveTimer);
   if (schemaBlocked) return;            // never write over data we do not understand
+  persistPending = false;
   storeSave(JSON.stringify({
     app: 'MindNote', schemaVersion: SCHEMA,
     docs: S.docs, order: S.order, active: S.active, ui: UI, deleted: deletedDocs,
@@ -888,14 +945,13 @@ function hydrate(raw) {
     UI = Object.assign(UI, data.ui || {});
     deletedDocs = data.deleted || {};
     Object.values(S.docs).forEach(d => {
-      d.connections = d.connections || []; d.tags = d.tags || [];
-      d.conngone = d.conngone || {};
-      // Filter out any connections that have been marked as deleted
-      d.connections = d.connections.filter(c => !d.conngone[c.id]);
+      d.connections = (d.connections || []).filter(c => connAlive(c, d));
+      d.tags = d.tags || [];
       Object.values(d.nodes).forEach(n => { n.tags = n.tags || []; });
       const fp = docFingerprint(d);
       contentSigs[d.id] = fp.sig;
       nodeSigs[d.id] = fp.sigs;
+      connBaseline(d);
     });
     migrateLegacyImages();
     workspaceSig = wsSig();
@@ -1094,7 +1150,7 @@ function render() {
   renderDocList();
   if (UI.view === 'map') renderMap(); else renderOutline();
   /* after the map, so the bar can be placed against the drawn curve */
-  if (!document.querySelector('#connBar .conn-input')) renderConnBar();
+  if (!document.querySelector('#connBar .conn-input, #connBar .conn-note')) renderConnBar();
   renderInspector();
   renderSheet();
 }
@@ -1316,14 +1372,32 @@ function buildHandles() {
     b.title = kind === 'child' ? 'Add a child of this node' : 'Add a node beside this one';
     layer.appendChild(b);
   });
+  /* The small dot on the node's corner: drag it to another node to draw a
+     connection, or click it and then click the other node. */
+  const dot = document.createElement('button');
+  dot.className = 'link-handle';
+  dot.id = 'h-link';
+  dot.dataset.linkfrom = '1';
+  dot.dataset.label = 'Drag to connect';
+  dot.title = 'Drag to another node to connect them';
+  dot.setAttribute('aria-label', 'Connect this node to another');
+  layer.appendChild(dot);
 }
 function positionHandles() {
-  const kid = $('#h-child'), sib = $('#h-sibling');
+  const kid = $('#h-child'), sib = $('#h-sibling'), dot = $('#h-link');
   if (!kid || !sib) return;
   const id = (hoverId && P[hoverId]) ? hoverId : ((UI.selected && P[UI.selected]) ? UI.selected : null);
-  if (!id || editing || nodeDrag || connectFrom) {
+  if (!id || editing || nodeDrag || connectFrom || linkDrag) {
     kid.classList.remove('show'); sib.classList.remove('show');
+    if (dot) dot.classList.remove('show');
     return;
+  }
+  if (dot) {
+    const q = P[id];
+    dot.dataset.for = id;
+    dot.style.left = (q.x + q.w - 4) + 'px';
+    dot.style.top = (q.y - 10) + 'px';
+    dot.classList.add('show');
   }
   const d = doc(), p = P[id], vertical = d.layout === 'vertical', side = sideOf(id);
   kid.dataset.for = id; sib.dataset.for = id;
@@ -1423,7 +1497,11 @@ function buildNodeEl(id) {
   head.appendChild(txt);
 
   const meta = [];
-  if (UI.showNotes && n.note.trim()) meta.push(`<span class="n-note-ic" data-note="${id}">📝</span>`);
+  if (UI.showNotes && n.note.trim()) {
+    /* hovering shows the note; a click opens it beside the node */
+    const preview = n.note.trim().length > 280 ? n.note.trim().slice(0, 280) + '…' : n.note.trim();
+    meta.push(`<span class="n-note-ic" data-note="${id}" title="${escapeHtml(preview)}" aria-label="Open note">📝</span>`);
+  }
   if (n.link && S.docs[n.link]) meta.push(`<span class="n-link-ic" data-link="${id}" title="Open linked document">🔗</span>`);
   meta.push(`<span class="n-url-ic link-manage${headerLinked ? ' has-url' : ''}" data-linkbtn="${id}" title="${headerLinked ? 'Edit link' : 'Add link'}">${headerLinked ? '↗' : '🔗'}</span>`);
   if (meta.length) {
@@ -1732,8 +1810,7 @@ function drawEdges(visible) {
     return el;
   };
   d.connections.forEach(c => {
-    // Skip connections that have been explicitly deleted (tombstone tracking)
-    if (d.conngone && d.conngone[c.id]) return;
+    if (!connAlive(c, d)) return;
     if (!P[c.a] || !P[c.b]) return;
     const g = connGeom(c);
     const dAttr = connPath(g);
@@ -1744,6 +1821,11 @@ function drawEdges(visible) {
     const hit = mk('path', 'xlink-hit');
     hit.setAttribute('d', dAttr);
     hit.dataset.conn = c.id;
+    if (c.note) {                         // hovering the line shows its note
+      const tt = document.createElementNS(SVG, 'title');
+      tt.textContent = c.note;
+      hit.appendChild(tt);
+    }
     lL.appendChild(hit);
 
     const p = mk('path', 'xlink' + (on ? ' is-on' : ''));
@@ -1751,12 +1833,13 @@ function drawEdges(visible) {
     p.dataset.conn = c.id;
     lL.appendChild(p);
 
-    if (c.title) {
+    const label = (c.title || '') + (c.note ? (c.title ? ' 📝' : '📝') : '');
+    if (label) {
       const t = mk('text', 'xlink-title');
       t.setAttribute('x', g.at.x);
       t.setAttribute('y', g.at.y - (on ? 14 : 5));
       t.setAttribute('text-anchor', 'middle');
-      t.textContent = c.title;
+      t.textContent = label;
       t.dataset.conn = c.id;
       lL.appendChild(t);
     }
@@ -1828,6 +1911,16 @@ function setConnWaypoint(c, world) {
   c.slide = (vx * g.ux + vy * g.uy) / g.len;
 }
 function straightenConn(c) { c.bow = 0; c.slide = 0; }
+
+/* Begin shaping a connection. The offset between the pointer and the
+   waypoint is kept for the whole drag, so grabbing the line anywhere along
+   it moves the curve smoothly instead of snapping its middle under the
+   pointer. */
+function startWayDrag(c, e, fromLine) {
+  const g = connGeom(c), w = toWorld(e.clientX, e.clientY);
+  return { id: c.id, moved: false, fromLine, sx: e.clientX, sy: e.clientY,
+           ox: g.at.x - w.x, oy: g.at.y - w.y };
+}
 
 /* ===================== tapered branches ============================
    A branch that thins as it goes, the way a twig does. The line is drawn
@@ -1979,7 +2072,7 @@ function connBarEl() {
 }
 function hideConnBar() {
   const el = document.getElementById('connBar');
-  if (el) { el.hidden = true; el.innerHTML = ''; }
+  if (el) { el.hidden = true; el.innerHTML = ''; el.classList.remove('is-note'); }
 }
 function theConn(id) { return doc().connections.find(c => c.id === id) || null; }
 
@@ -1989,6 +2082,7 @@ function renderConnBar() {
   const el = connBarEl();
   el.hidden = false;
   el.innerHTML = '';
+  el.classList.remove('is-note');
 
   const btn = (label, title, fn, cls) => {
     const b = document.createElement('button');
@@ -2000,11 +2094,8 @@ function renderConnBar() {
     return b;
   };
   el.appendChild(btn(c.title ? 'Edit title' : 'Add title', 'Name this connection', () => editConnTitle(c.id)));
-  if (c.note) {
-    el.appendChild(btn('📝 Edit note', 'Edit the note on this connection', () => editConnNote(c.id)));
-  } else {
-    el.appendChild(btn('📝 Add note', 'Add a note to this connection', () => editConnNote(c.id)));
-  }
+  el.appendChild(btn(c.note ? 'Edit note' : 'Add note',
+    c.note ? 'Edit the note on this connection' : 'Add a note to this connection', () => editConnNote(c.id)));
   if (!connIsStraight(c)) el.appendChild(btn('Straighten', 'Make this connection straight', () => {
     pushUndo(); straightenConn(c); save(); render(); toast('Straightened');
   }));
@@ -2051,6 +2142,7 @@ function editConnTitle(id) {
   const el = connBarEl();
   el.hidden = false;
   el.innerHTML = '';
+  el.classList.remove('is-note');
   const input = document.createElement('input');
   input.className = 'conn-input';
   input.value = c.title || '';
@@ -2084,7 +2176,9 @@ function editConnTitle(id) {
   setTimeout(() => { input.focus(); input.select(); }, 0);
 }
 
-/* Add or edit a note on a connection */
+/* A note on a connection: why these two are linked, a reference, a
+   condition. Edited in the connection's own bar; Ctrl/Cmd+Enter or a
+   click elsewhere keeps it, Esc leaves it as it was. */
 function editConnNote(id) {
   const c = theConn(id);
   if (!c) return;
@@ -2092,13 +2186,18 @@ function editConnNote(id) {
   const el = connBarEl();
   el.hidden = false;
   el.innerHTML = '';
-  const textarea = document.createElement('textarea');
-  textarea.className = 'conn-note';
-  textarea.value = c.note || '';
-  textarea.placeholder = 'Add a note to this connection…';
-  textarea.setAttribute('aria-label', 'Connection note');
-  textarea.style.cssText = 'width: 100%; min-height: 60px; padding: 8px; border: 1px solid var(--accent); border-radius: 4px; font-family: inherit; font-size: 13px; resize: none;';
-  el.appendChild(textarea);
+  el.classList.add('is-note');
+  el.style.pointerEvents = '';
+  const ta = document.createElement('textarea');
+  ta.className = 'conn-note';
+  ta.value = c.note || '';
+  ta.placeholder = 'A note on this connection…';
+  ta.setAttribute('aria-label', 'Connection note');
+  el.appendChild(ta);
+  const tip = document.createElement('div');
+  tip.className = 'conn-note-tip';
+  tip.textContent = 'Click away or Ctrl+Enter to keep · Esc to cancel';
+  el.appendChild(tip);
 
   let done = false;
   const finish = keep => {
@@ -2106,7 +2205,7 @@ function editConnNote(id) {
     done = true;
     const live = theConn(id);
     if (keep && live) {
-      const text = textarea.value.trim();
+      const text = ta.value.trim();
       if ((live.note || '') !== text) {
         pushUndo();
         if (text) live.note = text; else delete live.note;
@@ -2116,13 +2215,14 @@ function editConnNote(id) {
     hideConnBar();
     render();
   };
-  textarea.addEventListener('keydown', ev => {
+  ta.addEventListener('keydown', ev => {
+    ev.stopPropagation();
     if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); finish(true); }
   });
-  textarea.addEventListener('blur', () => finish(true));
-  el.style.cssText = 'position: fixed; z-index: 100; background: var(--bg); border: 1px solid var(--accent); border-radius: 8px; padding: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);';
+  ta.addEventListener('blur', () => finish(true));
   placeConnBar(el, c);
-  setTimeout(() => { textarea.focus(); }, 0);
+  setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
 }
 
 function removeConn(id) {
@@ -2130,12 +2230,8 @@ function removeConn(id) {
   const d = doc();
   d.connections = d.connections.filter(x => x.id !== id);
   if (selConn === id) selConn = null;
-
-  // Track deleted connections like we do for deleted nodes, to prevent resurrection from sync
-  if (!d.conngone) d.conngone = {};
-  d.conngone[id] = Date.now();
-
-  save(); render(); toast('Connection removed');
+  save();                               // records the removal in d.conngone (stampConns)
+  render(); toast('Connection removed');
 }
 function selectConn(id) {
   selConn = id;
@@ -2241,6 +2337,8 @@ function cancelGestures() {
   pendingCtx = null;
   pan = null; pinch = null; pointers.clear();
   wayDrag = null;
+  const cv = document.getElementById('canvas');
+  if (cv) cv.classList.remove('is-shaping');
   if (linkDrag) { linkDrag = null; clearLinkPreview(); }
   if (nodeDrag) { nodeDrag = null; dragOffset = null; render(); }
 }
@@ -2253,6 +2351,18 @@ function canvasSetup() {
   const grabPointer = id => { try { canvas.setPointerCapture(id); } catch (e) { } };
 
   canvas.addEventListener('pointerdown', e => {
+    /* the corner dot: start drawing a connection from its node */
+    const linkHandle = e.target.closest('[data-linkfrom]');
+    if (linkHandle) {
+      const from = linkHandle.dataset.for;
+      if (editing || !from || !N(from) || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      if (selConn) { selConn = null; hideConnBar(); }
+      grabPointer(e.pointerId);
+      linkDrag = { from, sx: e.clientX, sy: e.clientY, moved: false, target: null, viaHandle: true };
+      positionHandles();
+      e.preventDefault();
+      return;
+    }
     const foldBtn = e.target.closest('[data-fold]');
     const taskBtn = e.target.closest('[data-task]');
     const noteIc = e.target.closest('[data-note]');
@@ -2290,13 +2400,17 @@ function canvasSetup() {
         }
         lastWayTap = { id: c.id, t: now };
         grabPointer(e.pointerId);
-        wayDrag = { id: c.id, moved: false };
+        wayDrag = startWayDrag(c, e, false);
         e.preventDefault();
         return;
       }
     }
 
-    /* ---- the connection itself ---- */
+    /* ---- the connection itself ----
+       Pressing on the line selects it, and if the pointer then moves, the
+       same gesture bends the line — with a mouse or a finger, without first
+       having to find the small waypoint. A press without movement is a
+       plain click, and two in quick succession name the connection. */
     const connEl = aim.closest('[data-conn]');
     if (connEl && !editing && !connectFrom) {
       const id = connEl.dataset.conn;
@@ -2307,7 +2421,12 @@ function canvasSetup() {
         return;
       }
       lastConnTap = { id, t: now };
+      const c = theConn(id);
       selectConn(id);
+      if (c) {
+        grabPointer(e.pointerId);
+        wayDrag = startWayDrag(c, e, true);
+      }
       e.preventDefault();
       return;
     }
@@ -2397,10 +2516,16 @@ function canvasSetup() {
       const c = theConn(wayDrag.id);
       if (!c) { wayDrag = null; return; }
       if (!wayDrag.moved) {
+        /* from the line itself, wait for a deliberate movement so a click
+           with a slightly shaky hand does not bend it */
+        if (wayDrag.fromLine && Math.hypot(e.clientX - wayDrag.sx, e.clientY - wayDrag.sy) < 4) return;
         wayDrag.moved = true;
         pushUndo();                       // one undo step for the whole drag
+        hideConnBar();                    // out of the way while shaping
+        $('#canvas').classList.add('is-shaping');
       }
-      setConnWaypoint(c, toWorld(e.clientX, e.clientY));
+      const w = toWorld(e.clientX, e.clientY);
+      setConnWaypoint(c, { x: w.x + wayDrag.ox, y: w.y + wayDrag.oy });
       drawEdgesOnly();
       return;
     }
@@ -2473,6 +2598,7 @@ function canvasSetup() {
     if (wayDrag) {
       const moved = wayDrag.moved;
       wayDrag = null;
+      $('#canvas').classList.remove('is-shaping');
       if (moved) { save(); render(); }
       return;
     }
@@ -2480,17 +2606,21 @@ function canvasSetup() {
     if (linkDrag) {
       const ld = linkDrag; linkDrag = null;
       clearLinkPreview();
+      /* a click on the corner dot, without dragging: this node is one end,
+         and the next node clicked is the other */
+      if (!ld.moved && ld.viaHandle) {
+        connectFrom = ld.from; selConn = null;
+        clearMarked(); UI.selected = ld.from;
+        render();
+        toast('Now click the node to connect to — Esc to cancel');
+        return;
+      }
       /* let go without moving: this was a tap, so it means the same as it
          always did — pick this node as one end of the connection */
       if (!ld.moved) { handleNodeTap(ld.from, false); return; }
       if (ld.target && ld.target !== ld.from) {
-        pushUndo();
-        const c = { id: uid(), a: ld.from, b: ld.target };
-        doc().connections.push(c);
         connectFrom = null;
-        selConn = c.id;
-        save(); render();
-        toast('Connection added — drag the dot to curve it');
+        addConnection(ld.from, ld.target);
       } else {
         connectFrom = null;
         render();
@@ -2608,6 +2738,8 @@ function canvasSetup() {
   window.addEventListener('blur', closeContextMenu);
 
   canvas.addEventListener('pointerover', e => {
+    /* moving from a node onto one of its own handles must not hide them */
+    if (e.target.closest('[data-add], [data-linkfrom]')) return;
     const el = e.target.closest('.node');
     const id = el ? el.dataset.id : null;
     if (id !== hoverId) { hoverId = id; positionHandles(); }
@@ -2643,7 +2775,7 @@ function canvasSetup() {
       save(); render(); return;
     }
     const note = e.target.closest('[data-note]');
-    if (note) { UI.selected = note.dataset.note; UI.inspector = true; render(); return; }
+    if (note) { openNotePopover(note.dataset.note); return; }
     const link = e.target.closest('[data-link]');
     if (link) { const t = N(link.dataset.link).link; if (S.docs[t]) openDoc(t); return; }
     const urlIc = e.target.closest('[data-url]');
@@ -2716,6 +2848,28 @@ function reparent(id, newParent) {
   N(newParent).collapsed = false;
 }
 
+/* Connect two nodes, and leave the new connection selected so it can be
+   curved, named or given a note straight away. Two nodes already joined
+   are not joined twice — the existing connection is picked instead. */
+function addConnection(a, b) {
+  const d = doc();
+  if (!N(a) || !N(b) || a === b) { render(); return null; }
+  const have = d.connections.find(c => (c.a === a && c.b === b) || (c.a === b && c.b === a));
+  if (have) {
+    selConn = have.id; UI.selected = null;
+    render();
+    toast('Those two are already connected');
+    return have;
+  }
+  pushUndo();
+  const c = { id: uid(), a, b };
+  d.connections.push(c);
+  selConn = c.id; UI.selected = null;
+  save(); render();
+  toast('Connected — drag the line to curve it');
+  return c;
+}
+
 function handleNodeTap(id, additive) {
   if (moveInto) { moveSelectionInto(id); return; }
   if (additive) {                    // shift or ctrl click adds and removes
@@ -2727,14 +2881,11 @@ function handleNodeTap(id, additive) {
     return;
   }
   if (connectFrom) {
-    if (connectFrom !== id) {
-      pushUndo();
-      const made = { id: uid(), a: connectFrom, b: id };
-      doc().connections.push(made);
-      selConn = made.id;                  // ready to curve or name straight away
-      toast('Connection added — drag the dot to curve it');
-    }
-    connectFrom = null; save(); render(); return;
+    const from = connectFrom;
+    connectFrom = null;
+    if (from !== id) addConnection(from, id);
+    else { save(); render(); }
+    return;
   }
   const now = Date.now();
   if (lastTap.id === id && now - lastTap.t < 380) { lastTap = { id: null, t: 0 }; editNode(id); return; }
@@ -2845,6 +2996,8 @@ function openContextMenu(x, y, id) {
     menu.appendChild(head);
 
     item('Edit title', () => editNode(id), { hint: 'F2' });
+    item(n.note && n.note.trim() ? 'Edit note' : 'Add note', () => openNotePopover(id), { hint: 'Ctrl ⇧ K' });
+    item('Notes panel', () => { if (!(UI.inspector && UI.inspTab === 'note')) toggleNotesPanel(); }, { hint: 'Ctrl 5', skip: window.innerWidth <= 900 });
     item('Add child', () => newChild(id), { hint: 'Tab' });
     item('Add sibling', () => newSibling(id), { hint: 'Enter', skip: isRoot });
     item('New parent', () => createParent(id), { skip: isRoot });
@@ -2898,6 +3051,8 @@ function openContextMenu(x, y, id) {
     item('Paste and keep style', () => pasteBranch(d.root, false), { disabled: !clipboard });
     sep();
     item('Select all', () => { markAll(); render(); }, { hint: 'Ctrl A' });
+    item(UI.inspector && UI.inspTab === 'note' ? 'Close notes panel' : 'Notes panel', () => toggleNotesPanel(),
+      { hint: 'Ctrl 5', skip: window.innerWidth <= 900 });
     sep();
     item('Zoom in', () => zoomBy(1.15));
     item('Zoom out', () => zoomBy(0.87));
@@ -2983,6 +3138,98 @@ function openLinkPopover(id, x, y, forceEdit) {
     box.querySelector('.lp-open').addEventListener('click', () => { const u = n.url; closeLinkPopover(); openUrl(u); });
     box.querySelector('.lp-edit').addEventListener('click', () => openLinkPopover(id, x, y, true));
   }
+}
+
+/* =====================================================================
+   Note popover — the note on a node, opened right beside it.
+   Ctrl/Cmd+Shift+K, "Edit note" in the node's menu, or a click on the
+   node's note marker. Typing saves as you go; Esc, the ✕ or a click
+   anywhere else closes it. Clearing the text removes the note.
+   ===================================================================== */
+let notePopEl = null;
+let notePopClose = null;
+function closeNotePopover() {
+  if (notePopClose) { const f = notePopClose; notePopClose = null; f(); }
+}
+function noteAnchor(id) {
+  return document.querySelector(`#nodes .node[data-id="${id}"]`) ||
+         document.querySelector(`#outline [data-txt="${id}"]`);
+}
+function openNotePopover(id) {
+  const n = N(id);
+  if (!n || editing) return;
+  closeNotePopover(); closeLinkPopover(); closeContextMenu();
+  if (selConn) { selConn = null; hideConnBar(); }
+  if (!marked.has(id)) clearMarked();
+  UI.selected = id;
+  render();
+
+  const box = document.createElement('div');
+  box.id = 'notePop';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-label', 'Note');
+  box.innerHTML = `
+    <div class="np-head">
+      <span class="np-title"></span>
+      <button type="button" class="np-close" aria-label="Close note">✕</button>
+    </div>
+    <textarea class="np-text" placeholder="Write a note… it stays tucked behind a small marker on the node"></textarea>
+    <div class="np-foot">Saved as you type · Esc to close · clear the text to remove</div>`;
+  box.querySelector('.np-title').textContent = n.text || 'Untitled';
+  const ta = box.querySelector('.np-text');
+  ta.value = n.note || '';
+  document.body.appendChild(box);
+  notePopEl = box;
+
+  /* beside the node, on whichever side has room */
+  const anchor = noteAnchor(id);
+  const bw = box.offsetWidth, bh = box.offsetHeight, pad = 10;
+  let x = window.innerWidth / 2 - bw / 2, y = window.innerHeight / 2 - bh / 2;
+  if (anchor) {
+    const r = anchor.getBoundingClientRect();
+    if (r.right + pad + bw <= window.innerWidth - 8) { x = r.right + pad; y = r.top - 8; }
+    else if (r.left - pad - bw >= 8) { x = r.left - pad - bw; y = r.top - 8; }
+    else { x = r.left; y = r.bottom + pad; }         // a narrow screen: underneath
+  }
+  positionFloating(box, x, y);                       // and kept on screen
+
+  let undoTaken = false;
+  ta.addEventListener('input', () => {
+    const live = N(id);
+    if (!live) return;
+    if (!undoTaken) { pushUndo(); undoTaken = true; }   // one undo step per visit
+    live.note = ta.value.trim() ? ta.value : '';
+    save();
+  });
+  ta.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); closeNotePopover(); }
+  });
+  box.querySelector('.np-close').addEventListener('click', () => closeNotePopover());
+
+  const outside = e => { if (!box.contains(e.target)) closeNotePopover(); };
+  document.addEventListener('pointerdown', outside, true);
+  notePopClose = () => {
+    document.removeEventListener('pointerdown', outside, true);
+    box.remove();
+    if (notePopEl === box) notePopEl = null;
+    render();                            // the note marker appears or goes
+  };
+  setTimeout(() => { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }, 0);
+}
+
+/* The notes panel: the side panel opened on its Note tab, which follows
+   whichever node is selected, so notes can be added one after another. */
+function toggleNotesPanel() {
+  if (window.innerWidth > 900) {
+    const open = UI.inspector && UI.inspTab === 'note';
+    UI.inspector = !open;
+    UI.inspTab = 'note';
+  } else {
+    if (!UI.selected) { toast('Select a node to add notes'); return; }
+    UI.sheetTab = UI.sheetTab === 'note' ? null : 'note';
+  }
+  save(); render();
 }
 
 /* A count with a way out. Without it a selection made by sweeping is easy
@@ -3441,10 +3688,19 @@ function keySetup() {
     if (mod && e.key.toLowerCase() === 'c' && UI.selected) { e.preventDefault(); multi() ? copySelection() : copyBranch(UI.selected); return; }
     if (mod && e.key.toLowerCase() === 'v' && UI.selected) { e.preventDefault(); pasteBranch(UI.selected); return; }
     if (mod && e.key.toLowerCase() === 'd' && UI.selected) { e.preventDefault(); multi() ? duplicateSelection() : duplicateNode(UI.selected); return; }
+    /* notes, as in MindNode: Shift+Cmd/Ctrl+K edits the selected node's
+       note beside it; Cmd/Ctrl+5 opens the notes panel */
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (UI.selected) openNotePopover(UI.selected); else toast('Select a node to add a note');
+      return;
+    }
+    if (mod && !e.shiftKey && !e.altKey && (e.key === '5' || e.code === 'Digit5')) { e.preventDefault(); toggleNotesPanel(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') { e.preventDefault(); toggleSide(); fitAfterResize(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') { e.preventDefault(); setSide('wide'); $('#search').focus(); return; }
     if (e.key === '/') { e.preventDefault(); setSide('wide'); $('#search').focus(); return; }
     if (e.key === 'Escape') {
+      if (notePopEl) { closeNotePopover(); return; }
       if ($('#ctx')) { closeContextMenu(); return; }
       if (selConn) { selConn = null; hideConnBar(); render(); return; }
       if (moveInto) { moveInto = false; render(); return; }
@@ -3630,7 +3886,14 @@ function renderInspector() {
   const body = $('#inspBody'), id = UI.selected;
   body.innerHTML = '';
   if (!id || !N(id)) {
-    $('#inspTitle').textContent = 'Document';
+    $('#inspTitle').textContent = UI.inspTab === 'note' ? 'Notes' : 'Document';
+    if (UI.inspTab === 'note') {
+      const hint = document.createElement('div');
+      hint.className = 'help';
+      hint.style.margin = '0 0 14px';
+      hint.textContent = 'Select a node to add notes. The panel follows your selection, so you can click node after node and keep writing.';
+      body.appendChild(hint);
+    }
     body.appendChild(panelDoc());
     return;
   }
@@ -3692,6 +3955,10 @@ function panelActions(id, w) {
   }
   w.appendChild(group('Edit', rowOf([
     chipBtn('Edit title', () => { UI.inspector = UI.inspector && window.innerWidth > 900; render(); editNode(id); }),
+    chipBtn(n.note && n.note.trim() ? 'Edit note' : 'Add note', () => {
+      if (window.innerWidth > 900) openNotePopover(id);
+      else { UI.sheetTab = 'note'; save(); render(); }
+    }),
     chipBtn('Add child', () => newChild(id)),
     chipBtn('Add sibling', () => newSibling(id)),
     chipBtn('New parent', () => createParent(id))
@@ -3795,7 +4062,7 @@ function panelNote(id, w) {
   ta.className = 'f-area';
   ta.placeholder = 'Tap to enter notes. They stay hidden behind a small marker until you open them.';
   ta.value = n.note;
-  ta.addEventListener('input', () => { n.note = ta.value; save(); });
+  ta.addEventListener('input', () => { n.note = ta.value.trim() ? ta.value : ''; save(); });
   ta.addEventListener('blur', () => render());
   w.appendChild(group('Note', ta));
 }
@@ -5255,14 +5522,39 @@ function wire() {
      switching apps, the OS reclaiming memory. Commit whatever is being
      typed and write it out synchronously before that happens. These are
      the events that actually fire on mobile; beforeunload often does not. */
+  /* Only write when this tab actually has something unsaved. Writing the
+     whole in-memory workspace unconditionally meant a second tab or an
+     installed copy left open in the background put its older copy back
+     over the one just saved here — which is how a removed connection
+     (or anything else) could reappear on the next reload. */
   const flushNow = () => {
     try { if (commitEditor) commitEditor(); } catch (e) { }
-    persistNow();
+    if (persistPending) persistNow();
   };
   window.addEventListener('pagehide', flushNow);
   window.addEventListener('beforeunload', flushNow);
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') flushNow();
+  });
+
+  /* Another tab saved. If this one is idle, take its copy so the two never
+     drift apart; this tab's own view (open document, selection, camera)
+     is kept. */
+  window.addEventListener('storage', e => {
+    if (e.key !== KEY || !e.newValue || !booted || schemaBlocked) return;
+    if (editing || persistPending || isTyping()) return;
+    const ui = Object.assign({}, UI);
+    const active = S.active;
+    const cams = {};
+    for (const [id, d] of Object.entries(S.docs)) if (d.cam) cams[id] = d.cam;
+    if (!hydrate(e.newValue)) return;
+    Object.assign(UI, ui);
+    for (const [id, cm] of Object.entries(cams)) if (S.docs[id]) S.docs[id].cam = cm;
+    if (S.docs[active]) S.active = active;
+    if (UI.selected && !doc().nodes[UI.selected]) UI.selected = null;
+    if (selConn && !theConn(selConn)) selConn = null;
+    persistPending = false;
+    render();
   });
 
   if ('serviceWorker' in navigator) {
@@ -5310,11 +5602,16 @@ window.MNApp = {
     const docs = {};
     for (const [id, d] of Object.entries(state.docs)) {
       if (cams[id]) d.cam = cams[id];
-      // Ensure connection tracking is initialized and clean
-      d.connections = d.connections || [];
-      d.conngone = d.conngone || {};
-      // Filter out any connections that have been marked as deleted
-      d.connections = d.connections.filter(c => !d.conngone[c.id]);
+      /* A connection removed on this device stays removed even if the copy
+         that came back was merged by an older server without tombstones. */
+      const mine = S.docs[id];
+      if (mine && mine.conngone) {
+        d.conngone = Object.assign({}, d.conngone || {});
+        for (const [cid, ts] of Object.entries(mine.conngone)) {
+          if (!d.conngone[cid] || ts > d.conngone[cid]) d.conngone[cid] = ts;
+        }
+      }
+      d.connections = (d.connections || []).filter(c => connAlive(c, d));
       docs[id] = d;
     }
     S.docs = docs;

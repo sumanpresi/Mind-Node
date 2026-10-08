@@ -152,7 +152,13 @@ node and its children tick with it; a parent shows a half-filled circle while it
 children are partly done.
 
 **Notes** — every node can carry a note that stays hidden behind a small 📝 until you
-open it.
+open it. Select a node and press `Ctrl`/`Cmd` + `Shift` + `K` (or choose *Add note* from its
+right-click menu) and the note opens right beside the node; it saves as you type and `Esc`
+closes it. Hover the 📝 to read the note without opening it, click it to edit. Clearing the
+text removes the note. `Ctrl`/`Cmd` + `5` (or *Notes panel* in the right-click menu)
+opens the notes panel at the side, which follows your selection, so you can click node
+after node and keep writing. Some browsers keep `Ctrl` + `5` for switching tabs; the menu
+item always works, and so does the shortcut in the installed app.
 
 **Visual tags** — create tags in the inspector, then use the sun icon beside a tag to
 spotlight everything carrying it and fade the rest.
@@ -160,14 +166,17 @@ spotlight everything carrying it and fade the rest.
 **Connections** — once the main structure is there, you will notice relationships between
 ideas on different branches. A connection draws the link without touching the hierarchy.
 
-To make one: select a node, press the link tool, then tap the second node. With a mouse
-you can instead drag straight from one node to the other — a line follows the pointer and
-the node you are over is picked out, so you can see where it will land before you let go.
+To make one: hover over a node (or select it on a touch screen) and a small orange dot
+appears on its top-right corner. Drag from the dot to the other node and let go — the node
+you are over is picked out before you release. Or click the dot, then click the second
+node. The link tool in the toolbar still works the old way too. Two nodes are never joined
+twice; trying again just selects the connection they already have.
 
-To change one: click or tap the connection to select it. A waypoint appears in the middle
-— drag it to give the line the curve you want, and double-click or double-tap it to pull
-the line straight again. The bar that appears offers the same, along with a title and
-removal. Double-clicking the connection itself goes straight to naming it, and the name is
+To change one: press on the line and drag — it bends to follow the pointer, with a mouse
+or a finger. Clicking it selects it and shows a waypoint in the middle, which you can also
+drag; double-click or double-tap the waypoint to pull the line straight again. The bar
+that appears offers straightening, a title, a note and removal. A connection with a note
+shows a 📝 on the line, and hovering the line shows the note. Double-clicking the connection itself goes straight to naming it, and the name is
 drawn along the line. Connections are listed in the Data panel, where a row selects the
 connection on the map and the ✕ removes it.
 
@@ -219,6 +228,8 @@ steps are kept per document.
 | `Delete` | Delete the node and its branch |
 | `Ctrl` / `Cmd` + `Z` | Undo |
 | `Ctrl` / `Cmd` + `F` or `/` | Search |
+| `Ctrl` / `Cmd` + `Shift` + `K` | Add or edit the selected node's note |
+| `Ctrl` / `Cmd` + `5` | Open or close the notes panel |
 | `Esc` | Deselect, or leave focus mode |
 
 On touch screens: tap to select, tap twice to edit, drag to move, and use the action bar

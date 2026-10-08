@@ -351,7 +351,8 @@ button{cursor:pointer;background:none;border:0}
 .xlink{fill:none;stroke:var(--link);stroke-width:2;stroke-dasharray:6 5;marker-end:url(#arrow);pointer-events:none}
 /* An invisible, generously wide copy of the line underneath, so it can be
    hit with a fingertip rather than only with a mouse. */
-.xlink-hit{fill:none;stroke:transparent;stroke-width:22;pointer-events:stroke;cursor:pointer}
+.xlink-hit{fill:none;stroke:transparent;stroke-width:22;pointer-events:stroke;cursor:grab}
+#canvas.is-shaping, #canvas.is-shaping *{cursor:grabbing !important}
 .xlink-hit:hover + .xlink{stroke-width:3.4}
 .xlink.is-on{stroke-width:3.4;stroke-dasharray:none}
 /* the line being drawn from one node towards another */
@@ -386,6 +387,33 @@ button{cursor:pointer;background:none;border:0}
   padding:7px 10px;font-size:13px;background:var(--paper);color:var(--text);
 }
 .conn-input:focus{outline:2px solid var(--accent);outline-offset:-1px}
+/* the bar while a connection's note is being written */
+#connBar.is-note{flex-direction:column;align-items:stretch;gap:6px;padding:8px;width:min(86vw,300px)}
+.conn-note{
+  width:100%;min-height:84px;resize:vertical;border:1px solid var(--line);border-radius:8px;
+  padding:8px 10px;font:inherit;font-size:13px;line-height:1.45;background:var(--paper);color:var(--text);
+}
+.conn-note:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.conn-note-tip{font-size:11px;color:var(--muted);padding:0 2px}
+
+/* the note on a node, opened beside it */
+#notePop{
+  position:fixed;z-index:70;width:min(calc(100vw - 16px),320px);
+  background:var(--surface);border:1px solid var(--line);border-top:3px solid var(--accent);
+  border-radius:12px;box-shadow:0 14px 36px rgba(20,20,43,.22);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+#notePop .np-head{display:flex;align-items:center;gap:8px;padding:8px 8px 6px 12px;border-bottom:1px solid var(--line)}
+#notePop .np-title{flex:1;min-width:0;font-size:12px;font-weight:700;color:var(--muted);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#notePop .np-close{width:26px;height:26px;border-radius:7px;color:var(--muted);font-size:13px}
+#notePop .np-close:hover{background:var(--paper);color:var(--text)}
+#notePop .np-text{
+  border:0;resize:vertical;min-height:150px;max-height:50vh;padding:10px 12px;
+  font:inherit;font-size:14px;line-height:1.5;background:var(--surface);color:var(--text);
+}
+#notePop .np-text:focus{outline:none}
+#notePop .np-foot{font-size:11px;color:var(--muted);padding:6px 12px 8px;border-top:1px solid var(--line);background:var(--paper)}
 @media (pointer:coarse){
   .conn-btn{padding:10px 13px;font-size:13.5px}
   .xlink-hit{stroke-width:30}
@@ -614,6 +642,27 @@ button{cursor:pointer;background:none;border:0}
   opacity:0;pointer-events:none;transition:opacity .12s ease;
 }
 .add-handle:hover::after{opacity:1}
+
+/* the dot on a node's corner that draws a connection */
+.link-handle{
+  position:absolute;width:14px;height:14px;padding:0;border-radius:50%;
+  background:var(--link);border:2px solid var(--surface);
+  box-shadow:0 1px 5px rgba(20,20,43,.3);cursor:crosshair;
+  opacity:0;transform:scale(.5);pointer-events:none;z-index:7;
+  transition:opacity .12s ease, transform .12s ease;
+  touch-action:none;
+}
+.link-handle::before{content:'';position:absolute;inset:-7px;border-radius:50%}
+.link-handle.show{opacity:1;transform:scale(1);pointer-events:auto}
+.link-handle:hover{transform:scale(1.3)}
+.link-handle::after{
+  content:attr(data-label);position:absolute;bottom:calc(100% + 7px);left:50%;
+  transform:translateX(-50%);background:var(--ink);color:#fff;
+  font-size:11px;font-weight:600;padding:3px 8px;border-radius:6px;white-space:nowrap;
+  opacity:0;pointer-events:none;transition:opacity .12s ease;
+}
+.link-handle:hover::after{opacity:1}
+@media (pointer:coarse){ .link-handle{width:18px;height:18px} }
 
 /* a node matching the current search: lit so it can be picked out of a few
    hundred at a glance, without disturbing its own colour */
