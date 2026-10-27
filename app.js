@@ -1772,6 +1772,18 @@ function layoutManual() {
   };
   rootsOf().forEach(walk);
 }
+/* Shift a set of nodes by the same amount. A node that has never been
+   placed (a child hidden inside a folded branch) has no position yet;
+   it is left alone so it is placed beside its parent when it appears,
+   rather than being given a position near the middle of the map. */
+function moveBranch(ids, dx, dy) {
+  const d = doc();
+  ids.forEach(id => {
+    const n = d.nodes[id];
+    if (!n || n.x == null || n.y == null) return;
+    n.x += dx; n.y += dy;
+  });
+}
 function pinAll() {
   const d = doc();
   Object.keys(P).forEach(id => { d.nodes[id].x = P[id].x; d.nodes[id].y = P[id].y; });
@@ -2532,7 +2544,8 @@ function canvasSetup() {
       const heads = (!additive && marked.has(id) && marked.size > 1) ? topLevel(selIds()) : [id];
       const ids = new Set();
       heads.forEach(h => { ids.add(h); descendants(h).forEach(x => ids.add(x)); });
-      nodeDrag = { id, heads, additive, sx: e.clientX, sy: e.clientY, moved: false, ids };
+      nodeDrag = { id, heads, additive, sx: e.clientX, sy: e.clientY, lx: e.clientX, ly: e.clientY,
+                  pid: e.pointerId, moved: false, ids };
     } else {
       pan = { sx: e.clientX, sy: e.clientY, cx: cam().x, cy: cam().y, moved: false };
     }
@@ -2599,6 +2612,9 @@ function canvasSetup() {
       return;
     }
     if (nodeDrag) {
+      /* only the finger (or mouse) that picked the node up moves it */
+      if (nodeDrag.pid != null && e.pointerId !== nodeDrag.pid) return;
+      nodeDrag.lx = e.clientX; nodeDrag.ly = e.clientY;
       const s = cam().s;
       const dx = (e.clientX - nodeDrag.sx) / s, dy = (e.clientY - nodeDrag.sy) / s;
       if (!nodeDrag.moved && Math.hypot(dx, dy) < 5) return;
@@ -2669,21 +2685,48 @@ function canvasSetup() {
     }
 
     if (nodeDrag) {
+      /* a second finger lifting does not end the drag of the first */
+      if (nodeDrag.pid != null && e.pointerId !== nodeDrag.pid) return;
       const nd = nodeDrag; nodeDrag = null; dragOffset = null;
+      /* Where the node was last seen under the pointer. A cancelled touch
+         reports no useful position of its own, so it is never used. */
+      const endX = e.type === 'pointercancel' ? nd.lx : e.clientX;
+      const endY = e.type === 'pointercancel' ? nd.ly : e.clientY;
+      if (!nd.moved && e.type === 'pointercancel') { render(); return; }
       if (!nd.moved) {
         handleNodeTap(nd.id, nd.additive);
       } else if (nd.target) {
         /* dropped onto a node: every head of the drag moves under it */
         pushUndo();
         const heads = (nd.heads || [nd.id]).filter(h => h !== nd.target && !descendants(h).includes(nd.target));
+        const d = doc();
+        if (d.layout === 'manual') {
+          /* In Manual the branch stays where it was let go, only nudged
+             clear of the node it now hangs from so the two do not overlap. */
+          const s = cam().s;
+          const dx = (endX - nd.sx) / s, dy = (endY - nd.sy) / s;
+          const t = P[nd.target];
+          heads.forEach(h => {
+            const branch = [h, ...descendants(h)];
+            moveBranch(branch, dx, dy);
+            const hn = d.nodes[h], hp = P[h];
+            if (t && hn && hp && hn.x != null &&
+                hn.x < t.x + t.w && hn.x + hp.w > t.x && hn.y < t.y + t.h && hn.y + hp.h > t.y) {
+              moveBranch(branch, t.x + t.w + 60 - hn.x, 0);
+            }
+          });
+        }
         heads.forEach(h => reparent(h, nd.target));
         save(); render();
-        if (heads.length > 1) toast(`${heads.length} branches moved`);
+        const tn = N(nd.target);
+        const tname = tn ? String(tn.text || '').split('\n')[0].slice(0, 40) : '';
+        if (heads.length > 1) toast(`${heads.length} branches moved under “${tname}” — Undo reverses it`);
+        else if (heads.length) toast(`Moved under “${tname}” — Undo reverses it`);
       } else {
         pushUndo();
         const d = doc();
         const s = cam().s;
-        const dx = (e.clientX - nd.sx) / s, dy = (e.clientY - nd.sy) / s;
+        const dx = (endX - nd.sx) / s, dy = (endY - nd.sy) / s;
         const heads = nd.heads || [nd.id];
         let detached = 0;
 
@@ -2691,9 +2734,7 @@ function canvasSetup() {
           const node = d.nodes[hid];
           if (!node) return;
           if (d.layout === 'manual') {
-            [hid, ...descendants(hid)].forEach(id => {
-              if (d.nodes[id]) { d.nodes[id].x += dx; d.nodes[id].y += dy; }
-            });
+            moveBranch([hid, ...descendants(hid)], dx, dy);
           } else if (node.parent) {
             /* pulled clear of everything: it becomes a main node of its own */
             const p = N(node.parent);
@@ -6352,6 +6393,8 @@ window.MNApp = {
   merge(state) {
     if (!booted) return false;          // never overwrite a workspace that has not loaded
     if (editing) return false;
+    /* never swap the map out from under a hand that is moving something */
+    if (nodeDrag || pan || pinch || wayDrag || linkDrag || band) return false;
     const ae = document.activeElement;
     if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return false;
     if (!state || !state.docs || !Object.keys(state.docs).length) return false;

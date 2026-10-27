@@ -28,6 +28,11 @@
   let lastPushed = '';
   let dirty = false;            // local edits not yet accepted by the server
   let busy = false;
+  /* Counts local edits. A reply from the server only describes the map as
+     it was when the request left, so if anything was edited while it was
+     on its way, that reply must not replace the map, or the edit (a node
+     just moved, say) would snap back and never be sent. */
+  let editGen = 0;
   let lastSyncAt = 0;
   let lastActivity = Date.now();
   let lastSize = 0;
@@ -63,6 +68,7 @@
     if (body.length > MAX_BYTES) { setStatus('error', 'This workspace is too large to sync — try splitting it across documents'); return; }
 
     busy = true; setStatus('syncing');
+    const gen = editGen;
     try {
       const j = await callApi('/api/sync', {
         method: 'POST',
@@ -72,6 +78,14 @@
       if (!j.ok) { setStatus('error', j.message || 'Sync unavailable'); return; }
       lastPushed = body;
       lastSize = body.length;
+      if (gen !== editGen) {
+        /* edited meanwhile: keep this device's copy and send it next */
+        dirty = true;
+        clearTimeout(pushTimer);
+        pushTimer = setTimeout(push, PUSH_DELAY);
+        lastSyncAt = Date.now();
+        return;
+      }
       dirty = false;
       if (window.MNApp.merge(j.state)) lastActivity = Date.now();
       lastSyncAt = Date.now();
@@ -85,9 +99,11 @@
     if (!cfg.code || busy || !window.MNApp) return;
     if (dirty) return push();                       // never let a pull discard local edits
     busy = true; setStatus('syncing');
+    const gen = editGen;
     try {
       const j = await callApi('/api/sync?code=' + encodeURIComponent(cfg.code), { cache: 'no-store' });
       if (!j.ok) { setStatus('error', j.message || 'Sync unavailable'); return; }
+      if (gen !== editGen || dirty) return;         // edited meanwhile: the push that follows wins
       if (window.MNApp.merge(j.state)) lastActivity = Date.now();
       lastSize = JSON.stringify(j.state || {}).length;
       lastSyncAt = Date.now();
@@ -112,6 +128,7 @@
   function schedulePush() {
     if (!cfg.code) return;
     dirty = true;
+    editGen++;
     lastActivity = Date.now();
     setStatus('syncing');
     clearTimeout(pushTimer);

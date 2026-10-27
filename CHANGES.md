@@ -1,4 +1,20 @@
-# Changes — v29 (27 October 2026)
+# Changes — v30 (27 October 2026)
+
+- **Moved nodes stay where you put them.** Four things could send a node somewhere else:
+  - A sync reply that left the server before the move could replace the map and snap the
+    node back, and the move was then never sent. A reply is now set aside when anything was
+    edited while it was on its way, and the device's own copy is sent instead. The map is
+    also never replaced mid-drag.
+  - In Manual layout, letting go over another node attached it there but put it back at its
+    old position. It now stays where it was let go, nudged clear of its new parent, and a
+    message says where it went (Undo reverses it).
+  - Moving a folded branch gave its hidden children a position near the middle of the map.
+    They now keep their places relative to the branch.
+  - On touch screens, a cancelled touch or a second finger could end a drag at the wrong
+    point. Only the finger that picked the node up moves it, and a cancelled touch keeps the
+    last position seen.
+
+# v29 (27 October 2026)
 
 - **Mouse wheel zooms the map.** Scrolling the wheel now zooms in and out around the
   pointer, smoothly and at the same pace on any mouse. `Shift` + wheel (or a sideways
