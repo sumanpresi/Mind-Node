@@ -2730,8 +2730,24 @@ function canvasSetup() {
   canvas.addEventListener('wheel', e => {
     if (editing) return;
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) zoomBy(e.deltaY > 0 ? 0.92 : 1.08, e.clientX, e.clientY);
-    else { const c = cam(); c.x -= e.deltaX; c.y -= e.deltaY; applyCam(); save(); }
+    /* Wheel deltas come in pixels, lines or pages depending on the device;
+       turn them all into pixels so every mouse zooms at the same pace. */
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    const dx = e.deltaX * unit, dy = e.deltaY * unit;
+    /* Shift + wheel, or a sideways-only scroll, moves the map instead. */
+    if (e.shiftKey || (dy === 0 && dx !== 0)) {
+      const c = cam();
+      c.x -= dx || dy; applyCam(); save();
+      return;
+    }
+    if (!dy) return;
+    /* Plain wheel zooms around the pointer. A trackpad pinch arrives as a
+       Ctrl + wheel with tiny steps, so it is given a stronger push. One
+       mouse-wheel notch (about 100px) changes the zoom by roughly 12%,
+       and a single event never jumps by more than that. */
+    const k = (e.ctrlKey || e.metaKey) ? 0.01 : 0.0012;
+    const f = Math.exp(clamp(-dy * k, -0.12, 0.12));
+    zoomBy(f, e.clientX, e.clientY);
   }, { passive: false });
 
   canvas.addEventListener('contextmenu', e => {

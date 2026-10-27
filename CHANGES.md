@@ -1,4 +1,11 @@
-# Changes — v28 (8 October 2026)
+# Changes — v29 (27 October 2026)
+
+- **Mouse wheel zooms the map.** Scrolling the wheel now zooms in and out around the
+  pointer, smoothly and at the same pace on any mouse. `Shift` + wheel (or a sideways
+  trackpad swipe) moves the map left and right; dragging the background still pans, and
+  trackpad pinch still zooms. Before, the wheel panned and only `Ctrl` + wheel zoomed.
+
+# v28 (8 October 2026)
 
 - **Attach files** picks several files at once (Ctrl- or Shift-click in the picker).
 - **Folder** attaches a whole folder: it is rebuilt in Google Drive with its subfolders,

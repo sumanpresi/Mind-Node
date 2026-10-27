@@ -96,8 +96,9 @@ recalculates whenever the foldable is opened or closed.
 
 ## What it does
 
-**Mind maps** — an infinite canvas. Drag the background to pan, pinch or `Ctrl` and
-scroll to zoom, **Fit** to frame everything.
+**Mind maps** — an infinite canvas. Drag the background to pan, scroll the mouse wheel
+(or pinch) to zoom around the pointer, `Shift` + scroll to move sideways, **Fit** to frame
+everything.
 
 **The node sheet (phones and folded screens)** — select a node and a sheet rises from
 the bottom showing a row of tabs: add child, actions, style, note, media, tags and
