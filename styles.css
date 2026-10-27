@@ -348,6 +348,11 @@ button{cursor:pointer;background:none;border:0}
 .edge{fill:none;stroke-linecap:round}
 /* a tapered branch is a filled shape, not a stroked line */
 .edge.taper{stroke:none}
+/* An invisible, wider copy of each branch line, so it can be grabbed and
+   bent. Lying under the connections, it never gets in their way. */
+.edge-hit{fill:none;stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:grab}
+.edge-hit:hover + .edge:not(.taper){stroke-width:4.2}
+.edge-hit:hover + .edge.taper{filter:brightness(1.12)}
 .xlink{fill:none;stroke:var(--link);stroke-width:2;stroke-dasharray:6 5;marker-end:url(#arrow);pointer-events:none}
 /* An invisible, generously wide copy of the line underneath, so it can be
    hit with a fingertip rather than only with a mouse. */
@@ -527,6 +532,7 @@ button{cursor:pointer;background:none;border:0}
 @media (pointer:coarse){
   .conn-btn{padding:10px 13px;font-size:13.5px}
   .xlink-hit{stroke-width:30}
+  .edge-hit{stroke-width:22}
 }
 .dim{opacity:.16}
 

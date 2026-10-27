@@ -1,4 +1,15 @@
-# Changes — v30 (27 October 2026)
+# Changes — v31 (27 October 2026)
+
+- **Bend the branch lines.** The line from a node to its child can now be reshaped by
+  dragging it, the way connections already could. With a mouse, press anywhere on the line
+  and drag. On a touch screen, hold your finger on the line for half a second, then drag (a
+  quick swipe across a line still moves the map). The line's middle follows the pointer, and
+  the shape keeps its proportions when either node is moved. Double-click (or double-tap) a
+  bent line to put it back; Undo works too. Works with Curved, Straight and Elbow branches
+  (a bent elbow becomes a smooth curve) and with tapered branches. Moving a node under a new
+  parent starts its line fresh.
+
+# v30 (27 October 2026)
 
 - **Moved nodes stay where you put them.** Four things could send a node somewhere else:
   - A sync reply that left the server before the move could replace the map and snap the

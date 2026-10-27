@@ -345,6 +345,8 @@ let editing = null;         // node id being text-edited
 let connectFrom = null;     // pending connection source
 let selConn = null;         // the connection currently selected, if any
 let wayDrag = null;         // a waypoint being dragged
+let edgeDrag = null;        // a branch line being bent
+let lastEdgeTap = { id: null, t: 0 };
 let linkDrag = null;        // dragging from one node to another to connect
 let dragOffset = null;      // {ids:Set, dx, dy}
 let undoStack = [];
@@ -1824,7 +1826,14 @@ function drawEdges(visible) {
        can be thick where it leaves the parent and thin where it arrives.
        A dashed or dotted line has no taper to give it, and an elbow has
        corners that a taper only makes untidy, so both keep their stroke. */
-    const shape = tapered && !dash ? branchGeom(a, b) : null;
+    /* an invisible, wider copy of the line underneath, to grab it by */
+    const hit = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    hit.setAttribute('d', curve(a, b, false, n));
+    hit.setAttribute('class', 'edge-hit');
+    hit.dataset.edge = id;
+    eL.appendChild(hit);
+
+    const shape = tapered && !dash ? branchGeom(a, b, n) : null;
     if (shape) {
       path.setAttribute('d', taperPath(shape, branchWidth(depthOf(n.parent)), branchWidth(depthOf(id))));
       path.setAttribute('class', 'edge taper' + (dim ? ' dim' : ''));
@@ -1833,13 +1842,25 @@ function drawEdges(visible) {
          drawn in nothing at all */
       path.style.fill = colorOf(id);
     } else {
-      path.setAttribute('d', curve(a, b));
+      path.setAttribute('d', curve(a, b, false, n));
       path.setAttribute('class', 'edge' + (dim ? ' dim' : ''));
       path.setAttribute('stroke', colorOf(id));
       path.setAttribute('stroke-width', n.parent === d.root ? 3.6 : 2.6);
       if (dash) path.setAttribute('stroke-dasharray', dash);
     }
     eL.appendChild(path);
+
+    /* while a branch is being bent, a handle shows the point being moved */
+    if (edgeDrag && edgeDrag.id === id && edgeDrag.moved) {
+      const m = branchMid(id);
+      if (m) {
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot.setAttribute('class', 'way');
+        dot.setAttribute('cx', m.x); dot.setAttribute('cy', m.y); dot.setAttribute('r', 6.5);
+        dot.style.stroke = colorOf(id);
+        eL.appendChild(dot);
+      }
+    }
   });
 
   const SVG = 'http://www.w3.org/2000/svg';
@@ -1973,13 +1994,64 @@ function branchWidth(depth) {
   return Math.max(BRANCH_W_MIN, BRANCH_W0 * Math.pow(0.62, Math.max(0, depth)));
 }
 
+/* ======================== bent branches ============================
+   A branch (the line from a parent to its child) can be bent by dragging
+   it. The bend is kept on the child as two fractions of the line's length
+   — how far the middle has been pushed along the line (a) and across it
+   (c) — so the shape keeps its proportions when either node moves. A
+   branch that has never been bent has no bend and draws as it always did.
+   =================================================================== */
+const hasBend = n => !!(n && n.bend &&
+  (Math.abs(n.bend.a || 0) > BOW_FLAT || Math.abs(n.bend.c || 0) > BOW_FLAT));
+
+/* The point halfway along a branch as it is drawn now. */
+function branchMid(id) {
+  const n = N(id);
+  if (!n || !n.parent || !P[id] || !P[n.parent]) return null;
+  const g = branchGeom(box(n.parent), box(id), n, true);
+  if (!g) return null;
+  return { x: (g.p0.x + 3 * g.p1.x + 3 * g.p2.x + g.p3.x) / 8,
+           y: (g.p0.y + 3 * g.p1.y + 3 * g.p2.y + g.p3.y) / 8 };
+}
+
+/* Bend a branch so its middle passes through a point on the canvas.
+   Moving both inner control points of the curve by v moves its middle by
+   three quarters of v, so v is the distance to go divided by 0.75. */
+function setBranchBend(id, world) {
+  const n = N(id);
+  if (!n || !n.parent || !P[id] || !P[n.parent]) return;
+  const g = branchGeom(box(n.parent), box(id), null, true);
+  const len = Math.hypot(g.p3.x - g.p0.x, g.p3.y - g.p0.y) || 1;
+  const ux = (g.p3.x - g.p0.x) / len, uy = (g.p3.y - g.p0.y) / len;
+  const px = uy, py = -ux;
+  const mx = (g.p0.x + 3 * g.p1.x + 3 * g.p2.x + g.p3.x) / 8;
+  const my = (g.p0.y + 3 * g.p1.y + 3 * g.p2.y + g.p3.y) / 8;
+  const vx = (world.x - mx) / 0.75, vy = (world.y - my) / 0.75;
+  n.bend = { a: (vx * ux + vy * uy) / len, c: (vx * px + vy * py) / len };
+}
+
+/* Begin bending a branch. The gap between the pointer and the line's
+   middle is kept for the whole drag, so grabbing the line anywhere moves
+   it smoothly instead of snapping its middle under the pointer. */
+function startEdgeDrag(id, x, y, pid) {
+  const m = branchMid(id), w = toWorld(x, y);
+  if (!m) return null;
+  return { id, pid, sx: x, sy: y, moved: false, ox: m.x - w.x, oy: m.y - w.y };
+}
+
 /* The same line curve() draws, as four points. Elbows have corners that
-   this cannot follow, so they are left alone. */
-function branchGeom(a, b) {
+   this cannot follow, so they are left alone — unless the branch has been
+   bent, which turns it into a smooth curve. With base set, an elbow is
+   given the curve it would bend from, and any bend is left off. */
+function branchGeom(a, b, n, base) {
   const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 }, bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
   const dx = bc.x - ac.x, dy = bc.y - ac.y;
-  const kind = doc().branch || 'curved';
-  if (kind === 'elbow') return null;
+  let kind = doc().branch || 'curved';
+  const bent = hasBend(n);
+  if (kind === 'elbow') {
+    if (!bent && !base) return null;
+    kind = 'curved';
+  }
   let p0, p1, p2, p3;
   if (Math.abs(dx) >= Math.abs(dy)) {
     const x1 = dx > 0 ? a.x + a.w : a.x, x2 = dx > 0 ? b.x : b.x + b.w;
@@ -2001,6 +2073,14 @@ function branchGeom(a, b) {
     } else {
       p1 = { x: ac.x, y: m }; p2 = { x: bc.x, y: m };
     }
+  }
+  if (bent) {
+    const len = Math.hypot(p3.x - p0.x, p3.y - p0.y) || 1;
+    const ux = (p3.x - p0.x) / len, uy = (p3.y - p0.y) / len;
+    const vx = (uy * n.bend.c + ux * n.bend.a) * len;
+    const vy = (-ux * n.bend.c + uy * n.bend.a) * len;
+    p1 = { x: p1.x + vx, y: p1.y + vy };
+    p2 = { x: p2.x + vx, y: p2.y + vy };
   }
   return { p0, p1, p2, p3 };
 }
@@ -2037,7 +2117,11 @@ function taperPath(g, w0, w1) {
   return 'M' + near[0] + 'L' + near.slice(1).join('L') + 'L' + far.join('L') + 'Z';
 }
 
-function curve(a, b, arc) {
+function curve(a, b, arc, n) {
+  if (!arc && hasBend(n)) {
+    const g = branchGeom(a, b, n);
+    return `M${g.p0.x} ${g.p0.y} C${g.p1.x} ${g.p1.y} ${g.p2.x} ${g.p2.y} ${g.p3.x} ${g.p3.y}`;
+  }
   const ac = { x: a.x + a.w / 2, y: a.y + a.h / 2 }, bc = { x: b.x + b.w / 2, y: b.y + b.h / 2 };
   const dx = bc.x - ac.x, dy = bc.y - ac.y;
   if (arc) {
@@ -2376,6 +2460,7 @@ function cancelGestures() {
   if (band) { band = null; hideBand(); clearPreview(); }
   pendingCtx = null;
   pan = null; pinch = null; pointers.clear();
+  edgeDrag = null;
   wayDrag = null;
   const cv = document.getElementById('canvas');
   if (cv) cv.classList.remove('is-shaping');
@@ -2423,7 +2508,7 @@ function canvasSetup() {
     let aim = e.target;
     if (e.pointerType !== 'mouse' && typeof document.elementFromPoint === 'function') {
       const exact = document.elementFromPoint(e.clientX, e.clientY);
-      if (exact && exact.closest && exact.closest('[data-conn], [data-way]')) aim = exact;
+      if (exact && exact.closest && exact.closest('[data-conn], [data-way], [data-edge]')) aim = exact;
     }
 
     /* ---- the selected connection's waypoint ---- */
@@ -2469,6 +2554,37 @@ function canvasSetup() {
       }
       e.preventDefault();
       return;
+    }
+    /* ---- a branch line ----
+       With a mouse, press on the line and drag to bend it. On a touch
+       screen the same press is the start of a pan, so the line is bent only
+       after holding still on it for a moment (see the long-press below).
+       Two quick clicks or taps on a bent line put it back as it was. */
+    const edgeEl = (!editing && !connectFrom) ? aim.closest('[data-edge]') : null;
+    if (edgeEl) {
+      const id = edgeEl.dataset.edge;
+      const now = Date.now();
+      if (lastEdgeTap.id === id && now - lastEdgeTap.t < 380) {
+        lastEdgeTap = { id: null, t: 0 };
+        const n = N(id);
+        if (hasBend(n)) {
+          pushUndo(); delete n.bend; save(); render(); toast('Line put back');
+          e.preventDefault();
+          return;
+        }
+      } else {
+        lastEdgeTap = { id, t: now };
+      }
+      if (e.pointerType === 'mouse') {
+        const ed = startEdgeDrag(id, e.clientX, e.clientY, e.pointerId);
+        if (ed) {
+          if (selConn) { selConn = null; hideConnBar(); }
+          grabPointer(e.pointerId);
+          edgeDrag = ed;
+          e.preventDefault();
+          return;
+        }
+      }
     }
     /* anywhere else puts the selected connection down */
     if (selConn && !aim.closest('[data-conn], [data-way]')) { selConn = null; hideConnBar(); }
@@ -2521,6 +2637,18 @@ function canvasSetup() {
 
         if (target) { cancelGestures(); openContextMenu(at.x, at.y, target); return; }
 
+        /* Held on a branch line: pick the line up, ready to bend. */
+        if (edgeEl && !nodeEl) {
+          const ed = startEdgeDrag(edgeEl.dataset.edge, at.x, at.y, e.pointerId);
+          if (ed) {
+            pan = null; nodeDrag = null;
+            ed.held = true;
+            edgeDrag = ed;
+            teachOnce('bend', 'Now drag to bend the line — double-tap it to put it back');
+            return;
+          }
+        }
+
         /* Held on empty canvas: arm a selection band. Drag from here to
            sweep up nodes; lift without moving and the canvas menu opens,
            which is what a plain hold has always done. */
@@ -2552,6 +2680,20 @@ function canvasSetup() {
   });
 
   canvas.addEventListener('pointermove', e => {
+    /* bending a branch: its middle follows the pointer */
+    if (edgeDrag) {
+      if (edgeDrag.pid != null && e.pointerId !== edgeDrag.pid) return;
+      if (!edgeDrag.moved) {
+        if (Math.hypot(e.clientX - edgeDrag.sx, e.clientY - edgeDrag.sy) < 4) return;
+        edgeDrag.moved = true;
+        pushUndo();                       // one undo step for the whole bend
+        $('#canvas').classList.add('is-shaping');
+      }
+      const w = toWorld(e.clientX, e.clientY);
+      setBranchBend(edgeDrag.id, { x: w.x + edgeDrag.ox, y: w.y + edgeDrag.oy });
+      drawEdgesOnly();
+      return;
+    }
     /* shaping a connection: the waypoint follows the pointer */
     if (wayDrag) {
       const c = theConn(wayDrag.id);
@@ -2639,6 +2781,20 @@ function canvasSetup() {
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
 
+    if (edgeDrag) {
+      if (edgeDrag.pid != null && e.pointerId !== edgeDrag.pid) return;
+      const ed = edgeDrag; edgeDrag = null;
+      $('#canvas').classList.remove('is-shaping');
+      if (ed.moved) {
+        save(); render();
+        teachOnce('unbend', 'Double-click (or double-tap) the line to put it back');
+        return;
+      }
+      if (ed.held) { render(); return; }  // held, then lifted without bending
+      /* a click on the line without dragging: the same as a click on the
+         empty canvas around it */
+      pan = { sx: ed.sx, sy: ed.sy, cx: cam().x, cy: cam().y, moved: false };
+    }
     if (wayDrag) {
       const moved = wayDrag.moved;
       wayDrag = null;
@@ -2940,6 +3096,7 @@ function reparent(id, newParent) {
     if (old) old.children = old.children.filter(c => c !== id);
   }
   n.parent = newParent;
+  delete n.bend;                          // a bend made for the old line means nothing on the new one
   if (d.layout !== 'manual') { n.x = null; n.y = null; }   // let the layout take over again
   N(newParent).children.push(id);
   N(newParent).collapsed = false;
@@ -6394,7 +6551,7 @@ window.MNApp = {
     if (!booted) return false;          // never overwrite a workspace that has not loaded
     if (editing) return false;
     /* never swap the map out from under a hand that is moving something */
-    if (nodeDrag || pan || pinch || wayDrag || linkDrag || band) return false;
+    if (nodeDrag || pan || pinch || wayDrag || linkDrag || band || edgeDrag) return false;
     const ae = document.activeElement;
     if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return false;
     if (!state || !state.docs || !Object.keys(state.docs).length) return false;
